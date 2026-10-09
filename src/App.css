@@ -1,0 +1,178 @@
+:root {
+  --bg: #0f1419;
+  --panel: #18202a;
+  --line: #2a3542;
+  --text: #e6edf3;
+  --muted: #8b98a5;
+  --gold: #c8aa6e;
+  --win: #2e8b57;
+  --loss: #b04848;
+}
+
+body { margin: 0; background: var(--bg); color: var(--text); font-family: system-ui, sans-serif; }
+button { margin: 0; padding: 6px 14px; cursor: pointer; }
+.status { padding: 24px; }
+
+.modebar { display: flex; align-items: center; gap: 8px; padding: 8px 16px; background: var(--panel); border-bottom: 1px solid var(--line); position: sticky; top: 0; z-index: 10; }
+.modebar .brand { font-weight: 600; margin-right: auto; color: var(--gold); }
+.modebar button, .subnav button { margin: 0; background: transparent; color: var(--muted); border: 1px solid var(--line); border-radius: 4px; }
+.modebar button.on, .subnav button.on { color: var(--text); border-color: var(--gold); }
+
+/* Swagger UI is designed for a light page. */
+.app .swagger-ui { background: #fff; color: #3b4151; min-height: 100vh; }
+
+.player { padding: 16px 24px 48px; max-width: 1100px; }
+.profile-head { display: flex; align-items: center; gap: 16px; }
+.profile-head h1 { margin: 0; font-size: 22px; }
+.profile-head .tag { color: var(--muted); font-weight: 400; margin-left: 4px; }
+.avatar { width: 64px; height: 64px; border-radius: 50%; border: 2px solid var(--gold); }
+.muted { color: var(--muted); margin: 4px 0; }
+.fine { color: var(--muted); font-size: 12px; }
+.notice { padding: 8px 12px; background: var(--panel); border-left: 3px solid var(--gold); }
+
+.subnav { display: flex; gap: 8px; margin: 16px 0; }
+.cards { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 12px; }
+.card { background: var(--panel); border: 1px solid var(--line); border-radius: 6px; padding: 12px 16px; }
+.card h3 { margin: 0 0 6px; font-size: 13px; color: var(--muted); text-transform: uppercase; letter-spacing: .04em; }
+.card .big { font-size: 20px; margin: 0; }
+
+.games { width: 100%; border-collapse: collapse; margin-top: 16px; font-size: 14px; }
+.games th, .games td { text-align: left; padding: 6px 8px; border-bottom: 1px solid var(--line); }
+.games tr.win td:first-child { color: var(--win); }
+.games tr.loss td:first-child { color: var(--loss); }
+
+.search { margin-left: 12px; padding: 4px 8px; background: var(--panel); color: var(--text); border: 1px solid var(--line); border-radius: 4px; }
+.grid { display: grid; gap: 8px; margin-top: 12px; }
+.grid.icons { grid-template-columns: repeat(auto-fill, minmax(64px, 1fr)); }
+.grid.skins { grid-template-columns: repeat(auto-fill, minmax(140px, 1fr)); }
+.tile { margin: 0; padding: 4px; background: var(--panel); color: var(--text); border: 1px solid var(--line); border-radius: 4px; display: flex; flex-direction: column; align-items: center; gap: 4px; font-size: 12px; }
+.tile img { width: 100%; height: auto; display: block; }
+.tile.on { border-color: var(--gold); box-shadow: 0 0 0 1px var(--gold); }
+.tile:disabled { cursor: default; }
+.tile.locked { position: relative; opacity: .45; filter: grayscale(.8); }
+.grid.skins .tile.locked { opacity: .8; filter: none; }
+.tile.locked::after { content: "🔒"; position: absolute; top: 2px; right: 4px; font-size: 11px; }
+.owned-filter { margin-left: 12px; color: var(--muted); }
+
+.form { display: grid; gap: 12px; max-width: 420px; }
+.form label { display: grid; gap: 4px; color: var(--muted); }
+.form.wide { max-width: 760px; }
+.token-list { display: grid; grid-template-columns: repeat(auto-fill, minmax(300px, 1fr)); gap: 6px; max-height: 460px; overflow: auto; }
+.token { display: flex; align-items: center; gap: 6px; padding: 6px 8px; background: var(--panel); border: 1px solid var(--line); border-radius: 4px; color: var(--text); font-size: 13px; }
+.token.on { border-color: var(--gold); }
+.token .level { margin-left: auto; font-size: 11px; color: var(--muted); }
+.token .lv-challenger, .token .lv-grandmaster, .token .lv-master { color: var(--gold); }
+.form select { padding: 6px; background: var(--panel); color: var(--text); border: 1px solid var(--line); border-radius: 4px; }
+
+.tile-wrap { position: relative; }
+.tile-wrap .tile { width: 100%; }
+.tile-wrap .dl { position: absolute; bottom: 4px; right: 4px; margin: 0; padding: 0 5px; font-size: 11px; line-height: 18px; background: rgba(15,20,25,.8); color: var(--text); border: 1px solid var(--line); border-radius: 3px; opacity: 0; }
+.tile-wrap:hover .dl, .tile-wrap .dl:focus { opacity: 1; }
+.token-img { width: 32px; height: 32px; flex: none; }
+.token-text { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.token .fine { font-size: 11px; }
+.row { display: flex; gap: 8px; }
+
+.rewards { display: grid; grid-template-columns: repeat(auto-fill, minmax(240px, 1fr)); gap: 12px; margin-top: 12px; }
+.reward-items { display: flex; flex-direction: column; gap: 8px; }
+.reward-item { display: flex; align-items: center; gap: 8px; }
+.reward-item img { width: 48px; height: 48px; object-fit: contain; }
+
+.loot-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 8px; margin-bottom: 16px; }
+.loot { display: flex; flex-direction: column; gap: 4px; padding: 6px; background: var(--panel); border: 1px solid var(--line); border-radius: 4px; font-size: 12px; }
+.loot img { width: 100%; aspect-ratio: 1; object-fit: cover; border-radius: 3px; }
+.loot.owned { border-color: var(--win); }
+.loot-name b { color: var(--gold); }
+button.inline { margin: 0 0 0 12px; padding: 2px 10px; }
+.loot-heading { font-size: 16px; margin: 20px 0 4px; color: var(--gold); }
+
+.rune-pages { display: grid; grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); gap: 12px; margin-top: 16px; }
+.rune-page.on { border-color: var(--gold); }
+.runes { display: flex; flex-wrap: wrap; gap: 4px; align-items: center; }
+.rune img { width: 28px; height: 28px; display: block; }
+.rune.keystone img { width: 44px; height: 44px; }
+
+.inline-left { margin: 10px 0 0; padding: 4px 12px; }
+.rune-editor { grid-column: 1 / -1; display: grid; gap: 8px; }
+.rune-editor h4 { margin: 10px 0 2px; color: var(--muted); font-size: 12px; text-transform: uppercase; letter-spacing: .04em; }
+.form-row { display: flex; align-items: center; gap: 8px; color: var(--muted); }
+.row.wrap { flex-wrap: wrap; }
+.tree-pick { margin: 0; display: flex; align-items: center; gap: 6px; background: var(--panel); color: var(--muted); border: 1px solid var(--line); border-radius: 4px; padding: 4px 10px; }
+.tree-pick img { width: 20px; height: 20px; }
+.tree-pick.on { color: var(--text); border-color: var(--gold); }
+.rune-row { display: flex; gap: 6px; }
+.rune-pick { margin: 0; padding: 2px; background: transparent; border: 2px solid transparent; border-radius: 50%; opacity: .4; filter: grayscale(.7); }
+.rune-pick img { width: 32px; height: 32px; display: block; }
+.rune-pick.keystone img { width: 48px; height: 48px; }
+.rune-pick.on { opacity: 1; filter: none; border-color: var(--gold); }
+.rune-pick:hover { opacity: .85; }
+
+
+.auto { display: grid; gap: 12px; max-width: 900px; }
+.auto-hero { display: flex; align-items: center; gap: 18px; }
+.auto-hero h2 { margin: 0 0 4px; }
+.status-pill { display: inline-flex; align-items: center; gap: 8px; margin: 0; padding: 3px 12px 3px 8px; background: var(--bg); border: 1px solid var(--line); border-radius: 999px; font-size: 13px; }
+.dot { width: 9px; height: 9px; border-radius: 50%; background: var(--muted); }
+.dot.idle { background: #5b8def; }
+.dot.active { background: var(--gold); animation: pulse 1.4s infinite; }
+.dot.hot { background: var(--win); animation: pulse .8s infinite; }
+.dot.error { background: var(--loss); }
+@keyframes pulse { 50% { opacity: .35; } }
+.auto-cards { display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 12px; }
+.auto-card-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+.auto-card-head h3 { margin: 0; }
+.auto-card p, .auto-list > p { margin: 6px 0 0; }
+.switch { position: relative; width: 40px; height: 22px; margin: 0; padding: 0; border-radius: 999px; background: var(--line); border: 0; flex: none; transition: background .15s; }
+.switch span { position: absolute; top: 3px; left: 3px; width: 16px; height: 16px; border-radius: 50%; background: #fff; transition: left .15s; }
+.switch.on { background: var(--win); }
+.switch.on span { left: 21px; }
+.switch.big { width: 64px; height: 34px; }
+.switch.big span { width: 26px; height: 26px; top: 4px; left: 4px; }
+.switch.big.on span { left: 34px; }
+.champ-order { list-style: none; margin: 12px 0 0; padding: 0; display: grid; gap: 6px; }
+.champ-chip { display: flex; align-items: center; gap: 10px; padding: 4px 6px; background: var(--bg); border: 1px solid var(--line); border-radius: 6px; }
+.champ-chip img { width: 32px; height: 32px; border-radius: 4px; }
+.champ-chip .rank { width: 18px; text-align: center; color: var(--gold); font-weight: 600; }
+.champ-chip .name { flex: 1; }
+.champ-chip button { margin: 0; padding: 2px 8px; background: transparent; border: 1px solid transparent; color: var(--muted); }
+.champ-chip button:hover:not(:disabled) { border-color: var(--line); color: var(--text); }
+.champ-chip button:disabled { opacity: .25; }
+.champ-picker { margin-top: 12px; display: grid; gap: 8px; }
+.champ-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(72px, 1fr)); gap: 6px; max-height: 300px; overflow: auto; }
+.champ-tile { margin: 0; padding: 4px; display: flex; flex-direction: column; align-items: center; gap: 2px; background: transparent; border: 1px solid transparent; border-radius: 6px; font-size: 11px; color: var(--muted); }
+.champ-tile img { width: 48px; height: 48px; border-radius: 4px; }
+.champ-tile:hover { border-color: var(--gold); color: var(--text); }
+.auto-log { margin: 6px 0 0; padding-left: 18px; font-size: 13px; color: var(--muted); }
+
+.status-picker { margin-left: auto; display: inline-flex; align-items: center; gap: 8px; padding: 4px 10px; background: var(--panel); border: 1px solid var(--line); border-radius: 999px; }
+.status-picker select { background: transparent; color: var(--text); border: 0; font: inherit; }
+.dot.status-chat { background: var(--win); }
+.dot.status-away { background: #e0a030; }
+.dot.status-mobile { background: #5b8def; }
+.dot.status-offline { background: var(--muted); }
+
+
+.status-message { margin: 2px 0 0; padding: 2px 0; background: transparent; border: 0; color: var(--muted); font-style: italic; text-align: left; }
+.status-message:hover:not(:disabled) { color: var(--text); }
+.status-message-edit { display: flex; align-items: center; gap: 6px; margin-top: 4px; }
+.status-message-edit button { margin: 0; padding: 4px 10px; }
+
+.status-message { display: block; text-align: left; font-style: normal; }
+.status-lines { display: inline-block; vertical-align: top; width: 25.6em; font-family: Arial, Helvetica, sans-serif; font-size: 13px; }
+.status-line { display: block; white-space: pre; line-height: 1.25; color: var(--text); }
+.status-message-edit { display: grid; gap: 6px; margin-top: 4px; }
+/* Same width and font as a status row in the client: 25.6 em of Arial (Helvetica-style widths). */
+.status-edit { width: 25.6em; box-sizing: content-box; padding: 2px 4px; border: 1px solid var(--line); border-radius: 4px; background: var(--panel); color: var(--text); white-space: pre; wrap: off; overflow: auto; font-family: Arial, Helvetica, sans-serif; font-size: 13px; line-height: 1.25; resize: vertical; }
+.status-message-edit .row { display: flex; gap: 6px; }
+.status-message-edit .row button { margin: 0; padding: 4px 10px; }
+
+.ascii { display: grid; gap: 12px; max-width: 900px; }
+.drop { border: 2px dashed var(--line); border-radius: 8px; padding: 24px; text-align: center; cursor: pointer; background: var(--panel); }
+.drop.on { border-color: var(--gold); }
+.drop p { margin: 0; color: var(--muted); }
+.ascii-preview { margin: 0; padding: 12px; background: var(--panel); border: 1px solid var(--line); border-radius: 6px; overflow: auto; font-family: ui-monospace, Menlo, monospace; font-size: 11px; line-height: 1.2; white-space: pre; }
+/* Same size and style as the other buttons; only the margin is cleared so it lines up with the status message. */
+.status-row > button { margin: 0; }
+.ascii-toggle.on { border-color: var(--gold); color: var(--text); }
+.status-row { position: relative; display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.ascii-pop { position: absolute; top: 100%; left: 0; z-index: 30; width: min(560px, 85vw); margin-top: 8px; padding: 12px; background: var(--bg); border: 1px solid var(--line); border-radius: 8px; box-shadow: 0 8px 24px rgba(0,0,0,.4); }

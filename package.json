@@ -1,0 +1,48 @@
+{
+  "name": "rift-explorer-remastered",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "tsc && vite build",
+    "preview": "vite preview",
+    "tauri": "tauri",
+    "test": "bun test",
+    "sidecar": "bun build --compile app/util/sidecar-main.ts --outfile src-tauri/binaries/lcu-sidecar-$(rustc --print host-tuple)",
+    "live-check": "bun scripts/live_check.ts"
+  },
+  "dependencies": {
+    "@tauri-apps/api": "^2",
+    "axios": "0.21.1",
+    "btoa": "^1.2.1",
+    "buffer": "^6.0.3",
+    "chokidar": "3.5.0",
+    "cookie": "^0.7",
+    "formdata-node": "^6",
+    "fs-extra": "7.0.1",
+    "jscii": "1.0.0",
+    "mixin-deep": "^2.0.1",
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1",
+    "swagger-ui-react": "^3.41.1",
+    "traverse": "^0.6",
+    "url": "^0.11.4",
+    "yaml": "1.10.0"
+  },
+  "devDependencies": {
+    "@happy-dom/global-registrator": "^20.14.5",
+    "@tauri-apps/cli": "^2",
+    "@types/bun": "^1.4.2",
+    "@types/fs-extra": "^7",
+    "@types/node": "^22",
+    "@types/react": "^18.3.0",
+    "@types/react-dom": "^18.3.0",
+    "@types/swagger-ui-react": "^3.35.0",
+    "@vitejs/plugin-react": "^6.0.2",
+    "esbuild": "^0.25.0",
+    "happy-dom": "^20.14.5",
+    "typescript": "~6.0.3",
+    "vite": "^8.0.16"
+  }
+}
