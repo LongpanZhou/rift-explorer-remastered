@@ -12,8 +12,6 @@ export interface Game {
   assists?: number;
 }
 
-/** Games shorter than this are remakes or aborted games; the summary skips them. */
-
 const QUEUE_NAMES: Record<number, string> = {
   400: "Normal Draft",
   420: "Ranked Solo/Duo",
@@ -61,10 +59,7 @@ export function summarize(games: Game[]): Summary | null {
     const t = tally.get(g.championId) ?? { n: 0, last: 0 };
     tally.set(g.championId, { n: t.n + 1, last: Math.max(t.last, g.gameCreation) });
   }
-  let [topId, top] = [...tally][0];
-  for (const [id, t] of tally) {
-    if (t.n > top.n || (t.n === top.n && t.last > top.last)) [topId, top] = [id, t];
-  }
+  const [topId, top] = [...tally].sort(([, a], [, b]) => b.n - a.n || b.last - a.last)[0];
 
   return {
     counted: counted.length,
