@@ -6,6 +6,8 @@ const ApiDocs = lazy(() => import("./ApiDocs"));
 
 type Mode = "player" | "developer";
 
+const onClass = (active: boolean) => (active ? "on" : "");
+
 export default function App() {
   const [mode, setMode] = useState<Mode>("player");
   // The docs load on first open, then stay mounted like Player, so switching
@@ -15,11 +17,11 @@ export default function App() {
     <div className="app">
       <div className="modebar">
         <span className="brand">Rift Explorer Remastered</span>
-        <button className={mode === "player" ? "on" : ""} onClick={() => setMode("player")}>
+        <button className={onClass(mode === "player")} onClick={() => setMode("player")}>
           Player
         </button>
         <button
-          className={mode === "developer" ? "on" : ""}
+          className={onClass(mode === "developer")}
           onClick={() => {
             setMode("developer");
             setDocsOpened(true);

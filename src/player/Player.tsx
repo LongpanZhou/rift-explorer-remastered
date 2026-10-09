@@ -128,6 +128,7 @@ const SECTIONS = [
 type Section = (typeof SECTIONS)[number][0];
 
 const run = (args: string[]) => invokeJson("player", { args });
+const onClass = (active: boolean) => (active ? "on" : "");
 
 type AutoSettings = AutoConfig & { enabled: boolean };
 const AUTO_KEY = "rift-explorer-auto";
@@ -331,7 +332,7 @@ export default function Player({ active = true }: { active?: boolean }) {
 
       <nav className="subnav">
         {SECTIONS.map(([key, label]) => (
-          <button key={key} className={section === key ? "on" : ""} onClick={() => setSection(key)}>
+          <button key={key} className={onClass(section === key)} onClick={() => setSection(key)}>
             {label}
           </button>
         ))}
@@ -1285,7 +1286,7 @@ function ChampionList(props: {
         </h3>
         <div className="row">
           {props.ids.length > 0 && <button onClick={() => props.set([])}>Clear</button>}
-          <button className={adding ? "on" : ""} onClick={() => setAdding(!adding)}>
+          <button className={onClass(adding)} onClick={() => setAdding(!adding)}>
             {adding ? "Done" : "+ Add champion"}
           </button>
         </div>
