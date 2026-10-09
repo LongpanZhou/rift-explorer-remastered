@@ -152,19 +152,16 @@ button.inline { margin: 0 0 0 12px; padding: 2px 10px; }
 .dot.status-offline { background: var(--muted); }
 
 
-.status-message { margin: 2px 0 0; padding: 2px 0; background: transparent; border: 0; color: var(--muted); font-style: italic; text-align: left; }
+.status-message { margin: 2px 0 0; padding: 2px 0; background: transparent; border: 0; color: var(--muted); font-style: normal; text-align: left; display: block; }
 .status-message:hover:not(:disabled) { color: var(--text); }
-.status-message-edit { display: flex; align-items: center; gap: 6px; margin-top: 4px; }
+.status-message-edit { display: grid; align-items: center; gap: 6px; margin-top: 4px; }
 .status-message-edit button { margin: 0; padding: 4px 10px; }
 
-.status-message { display: block; text-align: left; font-style: normal; }
 .status-lines { display: inline-block; vertical-align: top; width: 25.6em; font-family: Arial, Helvetica, sans-serif; font-size: 13px; }
 .status-line { display: block; white-space: pre; line-height: 1.25; color: var(--text); }
-.status-message-edit { display: grid; gap: 6px; margin-top: 4px; }
 /* Same width and font as a status row in the client: 25.6 em of Arial (Helvetica-style widths). */
 .status-edit { width: 25.6em; box-sizing: content-box; padding: 2px 4px; border: 1px solid var(--line); border-radius: 4px; background: var(--panel); color: var(--text); white-space: pre; wrap: off; overflow: auto; font-family: Arial, Helvetica, sans-serif; font-size: 13px; line-height: 1.25; resize: vertical; }
 .status-message-edit .row { display: flex; gap: 6px; }
-.status-message-edit .row button { margin: 0; padding: 4px 10px; }
 
 .ascii { display: grid; gap: 12px; max-width: 900px; }
 .drop { border: 2px dashed var(--line); border-radius: 8px; padding: 24px; text-align: center; cursor: pointer; background: var(--panel); }
