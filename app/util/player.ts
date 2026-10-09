@@ -86,11 +86,6 @@ export async function setStatusMessage(client: LcuClient, textArg: string) {
   return client.put(CHAT_ME, { availability: me.availability, statusMessage });
 }
 
-/**
- * The parts of the profile the client can change while the app is open: icon,
- * level, status, crest and banner, background, title and tokens. Read on a timer; the big
- * catalogs and match history are loaded once with loadProfile.
- */
 /** The skin with this id, from its champion's game-data file (undefined if unknown). */
 async function findSkin(client: LcuClient, skinId: number): Promise<any> {
   const champ = await client
@@ -121,6 +116,11 @@ function regaliaOf(regalia: any, level: number) {
   };
 }
 
+/**
+ * The parts of the profile the client can change while the app is open: icon,
+ * level, status, crest and banner, background, title and tokens. Read on a timer; the big
+ * catalogs and match history are loaded once with loadProfile.
+ */
 export async function loadLive(client: LcuClient) {
   const [me, regalia, profile, chat, summary] = await Promise.all([
     client.get("/lol-summoner/v1/current-summoner"),
@@ -397,11 +397,6 @@ export async function loadRewards(client: LcuClient) {
     .sort((a, b) => a.date.localeCompare(b.date));
 }
 
-/**
- * Claims a pending grant, like the client's own claim button. Only grants with
- * no real choice (every item must be taken) are claimed; a grant that asks the
- * player to choose is refused rather than choosing for them.
- */
 /** A reward waiting to be claimed, as loadRewards returns it. */
 export interface PendingReward {
   grantId: string;
@@ -424,6 +419,11 @@ function select(client: LcuClient, g: PendingReward) {
   });
 }
 
+/**
+ * Claims a pending grant, like the client's own claim button. Only grants with
+ * no real choice (every item must be taken) are claimed; a grant that asks the
+ * player to choose is refused rather than choosing for them.
+ */
 export async function claimReward(client: LcuClient, grantId: string) {
   const grant = (await loadRewards(client)).find((g) => g.grantId === grantId);
   if (!grant) throw new ActionRefused(`no unclaimed reward ${grantId}`);
@@ -679,14 +679,14 @@ export function parseAutoArgs(args: string[]): AutoConfig {
   return { accept: flag(args[0]), lock: flag(args[1]), bans: ids(args[2]), picks: ids(args[3]) };
 }
 
+/** A tick that did nothing; it reports only the phase. */
+const idle = (phase: string) => ({ phase, did: null });
+
 /**
  * One step of auto-accept / auto-ban / auto-pick. The app calls this every
  * couple of seconds while auto mode is on; each call does at most one thing.
  * It never overrides a champion you hovered yourself.
  */
-/** An auto-pick tick that did nothing. */
-const idle = (phase: string) => ({ phase, did: null });
-
 export async function autoTick(client: LcuClient, cfg: AutoConfig) {
   const phase: string = await client.get("/lol-gameflow/v1/gameflow-phase");
 

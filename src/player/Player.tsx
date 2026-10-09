@@ -1451,10 +1451,10 @@ function StatusMessage(props: { value: string; busy: boolean; save: (m: string) 
   );
 }
 
-/** Drop a picture, pick its width, preview it as ASCII, and set it as your status. */
 /** Art is always 40 "#" wide: the client fits 44, so 40 leaves room for the curly quote on the edge rows. */
 const ASCII_COLS = 40;
 
+/** Drop a picture, pick its width, preview it as ASCII, and set it as your status. */
 function AsciiArt(props: { busy: boolean; setStatus: (text: string) => void }) {
   const cols = ASCII_COLS;
   const [invert, setInvert] = useState(false);
