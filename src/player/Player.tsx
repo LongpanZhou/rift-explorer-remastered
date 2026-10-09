@@ -4,7 +4,7 @@ import { invokeJson, messageFor, type SidecarError } from "../errors";
 import { formatDuration, queueName, summarize, type Game } from "./summary";
 import { safeCount, safeWorth, summarizeLoot, worth, type LootItem } from "./loot";
 import { fillerFor, LINE_INDENT, NBSP } from "./width";
-import { encodeText } from "../../app/util/text";
+import { encodeText, joinClientLines, splitClientLines, toClientText } from "../../app/util/text";
 import StatusError from "../StatusError";
 import type { AutoConfig, AutoTickResult, ClaimAllResult, PendingReward, StyleInfo } from "../../app/util/player";
 import { LEVELS_PER_CREST, MIN_COUNTED_SECONDS, TOKEN_LIMIT } from "../../app/util/rules";
@@ -1374,13 +1374,13 @@ function StatusMessage(props: { value: string; busy: boolean; save: (m: string) 
   const save = () => {
     setEditing(false);
     // Blank text clears the message; anything else is saved as typed, so pixel art keeps its spacing.
-    const text = draft.replace(/\r\n|\n/g, "\r");
+    const text = toClientText(draft);
     const empty = text.replace(/[ \t\r]/g, "") === "";
     const next = empty ? "" : text;
     if (next !== props.value) props.save(next);
   };
   if (!editing) {
-    const lines = props.value ? props.value.split(/\r\n|\r|\n|\u2028|\u2029/) : [];
+    const lines = props.value ? splitClientLines(props.value) : [];
     return (
       <button className="status-message" disabled={props.busy} onClick={start} title="Edit your status message">
         {lines.length ? (
@@ -1527,7 +1527,7 @@ function AsciiArt(props: { busy: boolean; setStatus: (text: string) => void }) {
           <p className="fine">
             Each row is {cols} '#' wide, which fits on one row in the client.
           </p>
-          <button disabled={props.busy} onClick={() => props.setStatus(art.join("\r"))}>
+          <button disabled={props.busy} onClick={() => props.setStatus(joinClientLines(art))}>
             Set as my status
           </button>
         </>
