@@ -1,7 +1,10 @@
 name: release
 
-# Builds the app for macOS (Apple Silicon), Windows and Linux, then publishes the
-# installers to a GitHub release. Runs when a version tag (v*) is pushed.
+# One file per platform, named for the app, the version and the platform:
+#   macOS (Apple Silicon)  APP_SLUG-VERSION-macos-arm64.dmg
+#   Windows (x64)          APP_SLUG-VERSION-windows-x64.zip   (unzip, then run the .exe)
+#   Linux (x86_64)         APP_SLUG-VERSION-linux-x86_64.AppImage   (chmod +x, then run)
+# Runs when a version tag (v*) is pushed.
 
 on:
   push:
@@ -9,6 +12,12 @@ on:
 
 permissions:
   contents: write
+
+env:
+  APP_SLUG: "Rift-Explorer-Remastered"
+  APP_EXE: "rift-explorer-tauri"
+  PRODUCT: "Rift Explorer Remastered"
+  NOTES: 'Downloads: macOS (Apple Silicon) .dmg, Windows .zip (unzip, then run the .exe), Linux .AppImage. Builds are unsigned.'
 
 jobs:
   create-release:
@@ -23,7 +32,7 @@ jobs:
         run: |
           TAG="${{ github.ref_name }}"
           if ! gh release view "$TAG" -R "${{ github.repository }}" >/dev/null 2>&1; then
-            gh release create "$TAG" -R "${{ github.repository }}" --title "Rift Explorer Remastered $TAG" --notes "Installers for macOS (Apple Silicon), Windows and Linux. Builds are unsigned."
+            gh release create "$TAG" -R "${{ github.repository }}" --title "$PRODUCT $TAG" --notes "$NOTES"
           fi
           echo "release_id=$(gh api repos/${{ github.repository }}/releases/tags/$TAG -q .id)" >> "$GITHUB_OUTPUT"
 
@@ -34,10 +43,13 @@ jobs:
       matrix:
         include:
           - os: macos-14
+            platform: macos-arm64
             sidecar: lcu-sidecar-aarch64-apple-darwin
           - os: windows-latest
+            platform: windows-x64
             sidecar: lcu-sidecar-x86_64-pc-windows-msvc.exe
           - os: ubuntu-22.04
+            platform: linux-x86_64
             sidecar: lcu-sidecar-x86_64-unknown-linux-gnu
     runs-on: ${{ matrix.os }}
     steps:
@@ -48,41 +60,53 @@ jobs:
         if: runner.os == 'Linux'
         run: |
           sudo apt-get update
-          sudo apt-get install -y libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf
+          sudo apt-get install -y libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf libfuse2
       - run: bun install --frozen-lockfile
       - name: Tests
         if: runner.os != 'Windows'
         run: bun test
       - name: Sidecar for this platform
         run: bun build --compile app/util/sidecar-main.ts --outfile src-tauri/binaries/${{ matrix.sidecar }}
-      - name: Build and publish the installers (macOS and Linux)
-        if: runner.os != 'Windows'
-        uses: tauri-apps/tauri-action@v0
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        with:
-          releaseId: ${{ needs.create-release.outputs.release_id }}
-          tagName: ${{ github.ref_name }}
-          releaseName: "Rift Explorer Remastered ${{ github.ref_name }}"
-          releaseBody: "Installers for macOS (Apple Silicon), Windows and Linux. Builds are unsigned."
-          releaseDraft: false
-          prerelease: false
+
+      - name: Build the macOS app (.dmg)
+        if: runner.os == 'macOS'
+        run: bun run tauri build --bundles dmg
+      - name: Build the Linux app (.AppImage)
+        if: runner.os == 'Linux'
+        run: bun run tauri build --bundles appimage
       - name: Build the Windows app (no installer)
         if: runner.os == 'Windows'
         run: bun run tauri build --no-bundle
-      - name: Package the Windows app as one portable zip
-        if: runner.os == 'Windows'
-        shell: pwsh
+
+      - name: Publish the macOS file
+        if: runner.os == 'macOS'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          $dir = "portable"
-          New-Item -ItemType Directory -Force $dir | Out-Null
-          Copy-Item "src-tauri/target/release/rift-explorer-tauri.exe" "$dir/Rift Explorer Remastered.exe"
-          Copy-Item "src-tauri/binaries/${{ matrix.sidecar }}" "$dir/lcu-sidecar.exe"
-          Compress-Archive -Path "$dir/*" -DestinationPath "Rift-Explorer-Remastered-portable-windows.zip" -Force
-          Get-ChildItem $dir | ForEach-Object { Write-Host $_.Name }
-      - name: Publish the Windows zip to the release
+          VERSION="${GITHUB_REF_NAME#v}"
+          OUT="${APP_SLUG}-${VERSION}-${{ matrix.platform }}.dmg"
+          cp src-tauri/target/release/bundle/dmg/*.dmg "$OUT"
+          gh release upload "$GITHUB_REF_NAME" "$OUT" -R "$GITHUB_REPOSITORY" --clobber
+      - name: Publish the Linux file
+        if: runner.os == 'Linux'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          VERSION="${GITHUB_REF_NAME#v}"
+          OUT="${APP_SLUG}-${VERSION}-${{ matrix.platform }}.AppImage"
+          cp src-tauri/target/release/bundle/appimage/*.AppImage "$OUT"
+          gh release upload "$GITHUB_REF_NAME" "$OUT" -R "$GITHUB_REPOSITORY" --clobber
+      - name: Publish the Windows zip (unzip, then run the .exe)
         if: runner.os == 'Windows'
         shell: pwsh
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: gh release upload "${{ github.ref_name }}" "Rift-Explorer-Remastered-portable-windows.zip" -R "${{ github.repository }}" --clobber
+        run: |
+          $version = $env:GITHUB_REF_NAME.TrimStart('v')
+          $dir = "portable"
+          New-Item -ItemType Directory -Force $dir | Out-Null
+          Copy-Item "src-tauri/target/release/$($env:APP_EXE).exe" "$dir/$($env:PRODUCT).exe"
+          Copy-Item "src-tauri/binaries/${{ matrix.sidecar }}" "$dir/lcu-sidecar.exe"
+          $out = "$($env:APP_SLUG)-$version-${{ matrix.platform }}.zip"
+          Compress-Archive -Path "$dir/*" -DestinationPath $out -Force
+          gh release upload $env:GITHUB_REF_NAME $out -R $env:GITHUB_REPOSITORY --clobber
