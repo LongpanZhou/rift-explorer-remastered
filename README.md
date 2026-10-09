@@ -42,8 +42,8 @@ Your name, tag, level, icon and status message are blurred in every screenshot.
 ## Requirements
 
 - The League of Legends client, running and logged in.
-- macOS, Windows or Linux. The app finds the client on macOS and Windows, and on
-  Linux you need to point it at the lockfile yourself.
+- macOS or Windows. The League client does not run on Linux, so the app can build
+  there but cannot connect to a client.
 
 ## Build and run
 
@@ -65,8 +65,8 @@ The builds are unsigned, so your system may ask you to confirm before opening th
 
 ## Notes
 
-- This app uses the League client's local API, which Riot does not document for
-  third-party tools. Riot can change or remove it at any time.
+- This app uses the League client's local API. Riot does not officially support it
+  for third-party tools, and Riot can change or remove parts of it at any time.
 - Auto champ select changes what you pick and ban in the client. Use it at your own
   risk, and check Riot's rules before you do.
 - Your data stays on your machine. The app only talks to the client on your computer,
