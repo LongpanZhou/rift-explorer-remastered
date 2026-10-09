@@ -968,13 +968,11 @@ function RunePages(props: {
   return (
     <>
       <section className="cards">
-        <div className="card">
-          <h3>Pages</h3>
-          <p className="big">
-            {runes.pages.length} of {runes.ownedPages}
-          </p>
-          <p className="muted">{runes.canAddPage ? "You have a free slot." : "All your page slots are in use."}</p>
-        </div>
+        <StatCard
+          title="Pages"
+          value={`${runes.pages.length} of ${runes.ownedPages}`}
+          note={runes.canAddPage ? "You have a free slot." : "All your page slots are in use."}
+        />
         <div className="card">
           <h3>Buy one more page</h3>
           <p className="muted">{runes.buy.prices.map((p) => `${n(p.cost)} ${CURRENCY_LABEL[p.currency] ?? p.currency}`).join(" or ")}</p>
