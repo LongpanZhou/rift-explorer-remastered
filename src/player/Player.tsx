@@ -190,7 +190,7 @@ export default function Player({ active = true }: { active?: boolean }) {
 
   const load = () => {
     setError(null);
-    run(["profile"]).then(setProfile).catch(setError);
+    fetchInto("profile", setProfile);
   };
   useEffect(load, []);
   useEffect(() => {
