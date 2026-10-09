@@ -30,26 +30,10 @@ import { classify, EXIT, findLockfile } from "./sidecar";
  * Sidecar entry point. Prints JSON on stdout and nothing else. Logs and errors
  * go to stderr. Exit codes are in exitCodes.ts.
  *
- * Usage (options come before the command, so command arguments can never be
- * read as options):
- *   lcu-sidecar [--lockfile <path>]                  print the Swagger spec
- *   lcu-sidecar [--lockfile <path>] player <command> [args]
- *     profile | challenges
- *     set-icon <iconId>
- *     set-regalia <crestType> <bannerType> <prestigeCrest>
- *     set-background <skinId>
- *     set-tokens [challengeId ...]   (0 to 3)
- *     set-title <titleItemId>         (-1 clears the title)
- *     rewards | claim-reward <grantId> | claim-all
- *     loot
- *     runes
- *     edit-rune-page <pageId> <n+hexName> <primaryTree> <secondaryTree> <9 rune ids>
- *     live                             (icon, level, status, crest, banner, background)
- *     set-status chat|away|mobile|offline
- *     set-status-message <n+hexText>   ("n" clears it)
- *     auto-tick <accept 0|1> <lock 0|1> <bans 1-2|none> <picks 1-2|none>
- *     buy-rune-page IP|RP              (spends currency; refused unless the store offers it)
- *     download icon|skin <id>         (saves to ~/Downloads/Rift Explorer)
+ * Usage: lcu-sidecar [--lockfile <path>] player <command> [args]
+ * Without the player word, it prints the Swagger spec. Options come before the
+ * command, so command arguments can never be read as options. The COMMANDS table
+ * is the only list of commands; the argument notes sit beside each entry.
  */
 
 type Client = ReturnType<typeof lcuClient>;
@@ -66,6 +50,7 @@ const COMMANDS: Record<string, Command> = {
   profile: (c) => loadProfile(c),
   challenges: (c) => loadChallenges(c),
   rewards: (c) => loadRewards(c),
+  // <grantId>
   "claim-reward": (c, r) => written(() => claimReward(c, r[0] ?? "")),
   "claim-all": (c) => claimAllRewards(c),
   loot: (c) => loadLoot(c),
@@ -73,17 +58,27 @@ const COMMANDS: Record<string, Command> = {
   // <pageId> <name as n+hex> <primary> <sub> <9 rune ids>
   "edit-rune-page": (c, r) =>
     written(() => editRunePage(c, Number(r[0]), r[1] ?? "", Number(r[2]), Number(r[3]), r.slice(4).map(Number))),
+  // chat|away|mobile|offline
   "set-status": (c, r) => written(() => setStatus(c, r[0] ?? "")),
+  // returns icon, level, status, crest, banner, background
   live: (c) => loadLive(c),
   // <text as n+hex>; "n" alone clears it
   "set-status-message": (c, r) => written(() => setStatusMessage(c, r[0] ?? "")),
+  // <accept 0|1> <lock 0|1> <bans 1-2|none> <picks 1-2|none>
   "auto-tick": (c, r) => autoTick(c, parseAutoArgs(r)),
+  // IP|RP; spends currency, refused unless the store offers it
   "buy-rune-page": (c, r) => buyRunePage(c, r[0] ?? ""),
+  // icon|skin <id>; saves to ~/Downloads/Rift Explorer
   download: (c, r) => downloadAsset(c, r[0], Number(r[1])),
+  // <iconId>
   "set-icon": (c, r) => written(() => setIcon(c, Number(r[0]))),
+  // <crestType> <bannerType> <prestigeCrest>
   "set-regalia": (c, r) => written(() => setRegalia(c, r[0], r[1], Number(r[2]))),
+  // <skinId>
   "set-background": (c, r) => written(() => setBackground(c, Number(r[0]))),
+  // [challengeId ...]; 0 to 3
   "set-tokens": (c, r) => written(() => setTokens(c, r.map(Number))),
+  // <titleItemId>; -1 clears the title
   "set-title": (c, r) => written(() => setTitle(c, Number(r[0]))),
 };
 
