@@ -6,7 +6,7 @@ import { safeCount, safeWorth, summarizeLoot, worth, type LootItem } from "./loo
 import { fillerFor, LINE_INDENT, NBSP } from "./width";
 import { encodeText } from "../../app/util/text";
 import StatusError from "../StatusError";
-import type { AutoConfig, PendingReward, StyleInfo } from "../../app/util/player";
+import type { AutoConfig, AutoTickResult, ClaimAllResult, PendingReward, StyleInfo } from "../../app/util/player";
 import { LEVELS_PER_CREST, MIN_COUNTED_SECONDS, TOKEN_LIMIT } from "../../app/util/rules";
 
 interface Profile {
@@ -29,13 +29,6 @@ interface Item {
 }
 
 type Reward = PendingReward;
-
-/** What claim-all reports back from the sidecar. */
-interface ClaimAllResult {
-  claimed: string[];
-  skipped: string[];
-  failed: { grantId: string; error: string }[];
-}
 
 interface Loot {
   wallet: { rp: number; be: number; oe: number };
@@ -180,7 +173,7 @@ export default function Player({ active = true }: { active?: boolean }) {
   usePoll(
     () =>
       run(["auto-tick", auto.accept ? "1" : "0", auto.lock ? "1" : "0", idList(auto.bans), idList(auto.picks)])
-        .then((r: { phase: string; did: string | null; championId?: number }) => {
+        .then((r: AutoTickResult) => {
           setAutoPhase(r.phase);
           if (!r.did) return;
           const name = r.championId ? profileRef.current?.champions[r.championId]?.name : undefined;

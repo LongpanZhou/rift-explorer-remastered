@@ -433,11 +433,18 @@ export async function claimReward(client: LcuClient, grantId: string) {
   return select(client, grant);
 }
 
+/** What claimAllRewards reports back. */
+export interface ClaimAllResult {
+  claimed: string[];
+  skipped: string[];
+  failed: { grantId: string; error: string }[];
+}
+
 /**
  * Claims every pending reward that needs no choice, one at a time, and keeps
  * going if one fails. Rewards that ask for a choice are skipped.
  */
-export async function claimAllRewards(client: LcuClient) {
+export async function claimAllRewards(client: LcuClient): Promise<ClaimAllResult> {
   const claimed: string[] = [];
   const skipped: string[] = [];
   const failed: { grantId: string; error: string }[] = [];
@@ -682,12 +689,19 @@ export function parseAutoArgs(args: string[]): AutoConfig {
 /** A tick that did nothing; it reports only the phase. */
 const idle = (phase: string) => ({ phase, did: null });
 
+/** What autoTick reports: the phase, and what it did (null when nothing). */
+export interface AutoTickResult {
+  phase: string;
+  did: string | null;
+  championId?: number;
+}
+
 /**
  * One step of auto-accept / auto-ban / auto-pick. The app calls this every
  * couple of seconds while auto mode is on; each call does at most one thing.
  * It never overrides a champion you hovered yourself.
  */
-export async function autoTick(client: LcuClient, cfg: AutoConfig) {
+export async function autoTick(client: LcuClient, cfg: AutoConfig): Promise<AutoTickResult> {
   const phase: string = await client.get("/lol-gameflow/v1/gameflow-phase");
 
   if (phase === "ReadyCheck") {
