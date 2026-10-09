@@ -7,8 +7,7 @@ and it can change the things the client's profile screen already lets you change
 Under development.
 
 This is a rewrite of [Pupix/rift-explorer](https://github.com/Pupix/rift-explorer),
-the original Electron app. It is now built with Tauri 2, with a Bun sidecar that
-talks to the client.
+the original desktop app.
 
 ## Screenshots
 
@@ -44,18 +43,6 @@ Your name, tag, level, icon and status message are blurred in every screenshot.
 - The League of Legends client, running and logged in.
 - macOS or Windows. The League client does not run on Linux, so the app can build
   there but cannot connect to a client.
-
-## Build and run
-
-You need [Bun](https://bun.sh) and [Rust](https://rustup.rs), plus the
-[Tauri prerequisites](https://tauri.app/start/prerequisites/) for your system.
-
-```sh
-bun install
-bun run sidecar          # builds the sidecar for your platform
-bun run tauri dev        # run the app
-bun test                 # sidecar and app tests
-```
 
 ## Releases
 
