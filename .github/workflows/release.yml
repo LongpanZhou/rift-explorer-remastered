@@ -55,7 +55,8 @@ jobs:
         run: bun test
       - name: Sidecar for this platform
         run: bun build --compile app/util/sidecar-main.ts --outfile src-tauri/binaries/${{ matrix.sidecar }}
-      - name: Build and publish the installers
+      - name: Build and publish the installers (macOS and Linux)
+        if: runner.os != 'Windows'
         uses: tauri-apps/tauri-action@v0
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -66,3 +67,22 @@ jobs:
           releaseBody: "Installers for macOS (Apple Silicon), Windows and Linux. Builds are unsigned."
           releaseDraft: false
           prerelease: false
+      - name: Build the Windows app (no installer)
+        if: runner.os == 'Windows'
+        run: bun run tauri build --no-bundle
+      - name: Package the Windows app as one portable zip
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $dir = "portable"
+          New-Item -ItemType Directory -Force $dir | Out-Null
+          Copy-Item "src-tauri/target/release/rift-explorer-tauri.exe" "$dir/Rift Explorer Remastered.exe"
+          Copy-Item "src-tauri/binaries/${{ matrix.sidecar }}" "$dir/lcu-sidecar.exe"
+          Compress-Archive -Path "$dir/*" -DestinationPath "Rift-Explorer-Remastered-portable-windows.zip" -Force
+          Get-ChildItem $dir | ForEach-Object { Write-Host $_.Name }
+      - name: Publish the Windows zip to the release
+        if: runner.os == 'Windows'
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: gh release upload "${{ github.ref_name }}" "Rift-Explorer-Remastered-portable-windows.zip" -R "${{ github.repository }}" --clobber

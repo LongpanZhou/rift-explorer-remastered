@@ -43,14 +43,15 @@ jobs:
           $code = $LASTEXITCODE
           Write-Host "exit code: $code"
           Get-Content err.txt
-          exit 0
           # With no League client running, the sidecar exits 2 (no Riot client)
           # or 3 (lockfile missing), and writes nothing to stdout.
           if ($stdout) { Write-Error "stdout must be empty when no client is running"; exit 1 }
           if ($code -ne 2 -and $code -ne 3) { Write-Error "expected exit 2 or 3, got $code"; exit 1 }
-      - name: Build the app (unsigned)
-        run: bun run tauri build
+          # PowerShell reports the last native command's exit code, so end on a clean exit.
+          exit 0
+      - name: Build the app (no installer)
+        run: bun run tauri build --no-bundle
       - uses: actions/upload-artifact@v4
         with:
           name: rift-explorer-windows
-          path: src-tauri/target/release/bundle/
+          path: src-tauri/target/release/rift-explorer-tauri.exe
