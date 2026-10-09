@@ -1,0 +1,55 @@
+name: ci
+
+# Runs the sidecar tests and builds the app on macOS and Windows (D6).
+# The release live check (scripts/live_check.ts) needs a logged-in League
+# client and is not run in CI.
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  macos:
+    runs-on: macos-14
+    steps:
+      - uses: actions/checkout@v4
+      - uses: oven-sh/setup-bun@v2
+      - uses: dtolnay/rust-toolchain@stable
+      - run: bun install --frozen-lockfile
+      - name: Sidecar tests (golden snapshot, unit, CLI exit codes)
+        run: bun test
+      - name: Build the sidecar for Apple Silicon
+        run: bun build --compile app/util/sidecar-main.ts --outfile src-tauri/binaries/lcu-sidecar-aarch64-apple-darwin
+      - name: Build the app (unsigned)
+        run: bun run tauri build
+      - uses: actions/upload-artifact@v4
+        with:
+          name: rift-explorer-macos
+          path: src-tauri/target/release/bundle/
+
+  windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: oven-sh/setup-bun@v2
+      - uses: dtolnay/rust-toolchain@stable
+      - run: bun install --frozen-lockfile
+      - name: Build the sidecar for Windows
+        run: bun build --compile app/util/sidecar-main.ts --outfile src-tauri/binaries/lcu-sidecar-x86_64-pc-windows-msvc.exe
+      - name: "Smoke test: sidecar finds no client and exits with a message (D6, criterion 5)"
+        shell: pwsh
+        run: |
+          $stdout = & .\src-tauri\binaries\lcu-sidecar-x86_64-pc-windows-msvc.exe 2> err.txt
+          $code = $LASTEXITCODE
+          Write-Host "exit code: $code"
+          Get-Content err.txt
+          # With no League client running, the sidecar exits 2 (no Riot client)
+          # or 3 (lockfile missing), and writes nothing to stdout.
+          if ($stdout) { Write-Error "stdout must be empty when no client is running"; exit 1 }
+          if ($code -ne 2 -and $code -ne 3) { Write-Error "expected exit 2 or 3, got $code"; exit 1 }
+      - name: Build the app (unsigned)
+        run: bun run tauri build
+      - uses: actions/upload-artifact@v4
+        with:
+          name: rift-explorer-windows
+          path: src-tauri/target/release/bundle/
