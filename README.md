@@ -36,6 +36,13 @@ Your name, tag, level, icon and status message are blurred in every screenshot.
 - **Status message:** set your custom message and online status.
 - **Auto champ select (optional, off by default):** accept the match, and ban or
   pick from your lists, in champ select.
+- **Phone champ select:** on the Phone tab, scan a QR code to open a page on your phone.
+  From the phone you can hover and lock picks and bans, and set summoner spells. The phone
+  must be on the same Wi-Fi as this Mac, and the app must stay open. Nothing goes through
+  the internet.
+- **Anonymous install count:** the top right shows how many installs have opened the app.
+  Each install sends one random ID at most once a day. No name, account or game data is
+  sent. Untick "Count me" to stop.
 - **Developer:** the client's local API as browsable docs, read-only.
 
 ## Requirements

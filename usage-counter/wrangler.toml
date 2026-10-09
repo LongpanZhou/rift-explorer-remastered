@@ -1,0 +1,9 @@
+# Deploy with: bunx wrangler login, then bunx wrangler kv namespace create USERS,
+# paste the returned id below, then bunx wrangler deploy (run in this folder).
+name = "rift-usage-counter"
+main = "src/index.ts"
+compatibility_date = "2026-10-01"
+
+[[kv_namespaces]]
+binding = "USERS"
+id = "REPLACE_WITH_KV_NAMESPACE_ID"

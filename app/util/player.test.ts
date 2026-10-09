@@ -462,3 +462,45 @@ test("live: reads icon, status, crest, banner, background, title and tokens", as
     currentTokens: [101101, 101200],
   });
 });
+
+// A session where the actions list is given directly, with an optional timer reading.
+const timed = (seconds: number | undefined, actions: any[][], extra: any = {}) => {
+  const base = session({ type: "pick" }) as any;
+  base[SESSION].actions = actions;
+  base[SESSION].timer = seconds === undefined ? undefined : { adjustedTimeLeftInPhase: seconds };
+  Object.assign(base[SESSION], extra);
+  return base;
+};
+
+test("hover first; lock only in the last 5 seconds of your turn", async () => {
+  const mine = { id: 7, actorCellId: 2, isInProgress: true, completed: false, championId: 0, type: "pick" };
+  const early = fakeClient(timed(60000, [[mine]]));
+  expect((await autoTick(early.client, cfg({ picks: [2] }))).did).toBe("hovered 2");
+  expect(early.writes[0].body).toEqual({ championId: 2, completed: false });
+
+  const late = fakeClient(timed(3000, [[{ ...mine, championId: 2 }]]));
+  expect((await autoTick(late.client, cfg({ picks: [2] }))).did).toBe("locked in 2");
+  expect(late.writes[0].body).toEqual({ championId: 2, completed: true });
+
+  const waiting = fakeClient(timed(60000, [[{ ...mine, championId: 2 }]]));
+  expect((await autoTick(waiting.client, cfg({ picks: [2] }))).did).toBeNull();
+  expect(waiting.writes).toHaveLength(0);
+});
+
+test("a ban skips a champion a teammate is hovering to ban", async () => {
+  const mine = { id: 9, actorCellId: 2, isInProgress: true, completed: false, championId: 0, type: "ban" };
+  const teammate = { id: 8, actorCellId: 3, isInProgress: true, completed: false, championId: 1, type: "ban" };
+  const team = { myTeam: [{ cellId: 2, championId: 0, championPickIntent: 0 }, { cellId: 3, championId: 0, championPickIntent: 0 }] };
+  const { client, writes } = fakeClient(timed(60000, [[mine, teammate]], team));
+  expect((await autoTick(client, cfg({ bans: [1, 2], lock: false }))).did).toBe("hovered ban 2");
+  expect(writes[0].body).toEqual({ championId: 2, completed: false });
+});
+
+test("your own hover moves on when a teammate takes the same champion", async () => {
+  const mine = { id: 9, actorCellId: 2, isInProgress: true, completed: false, championId: 2, type: "ban" };
+  const teammate = { id: 8, actorCellId: 3, isInProgress: true, completed: false, championId: 2, type: "ban" };
+  const team = { myTeam: [{ cellId: 2, championId: 0, championPickIntent: 0 }, { cellId: 3, championId: 0, championPickIntent: 0 }] };
+  const { client, writes } = fakeClient(timed(60000, [[mine, teammate]], team));
+  expect((await autoTick(client, cfg({ bans: [2, 1], lock: false }))).did).toBe("hovered ban 1");
+  expect(writes[0].body).toEqual({ championId: 1, completed: false });
+});

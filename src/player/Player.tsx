@@ -6,6 +6,7 @@ import { safeCount, safeWorth, summarizeLoot, worth, type LootItem } from "./loo
 import { fillerFor, LINE_INDENT, NBSP } from "./width";
 import { encodeText, joinClientLines, splitClientLines, toClientText } from "../../app/util/text";
 import StatusError from "../StatusError";
+import PhonePanel from "./PhonePanel";
 import type { AutoConfig, AutoTickResult, ClaimAllResult, PendingReward, StyleInfo } from "../../app/util/player";
 import { LEVELS_PER_CREST, MIN_COUNTED_SECONDS, TOKEN_LIMIT } from "../../app/util/rules";
 
@@ -116,6 +117,7 @@ const QUEUE_LABEL: Record<string, string> = {
 };
 const SECTIONS = [
   ["overview", "Overview"],
+  ["phone", "Phone"],
   ["icon", "Icon"],
   ["border", "Border & banner"],
   ["background", "Background"],
@@ -400,6 +402,7 @@ export default function Player({ active = true }: { active?: boolean }) {
           }
         />
       )}
+      {section === "phone" && <PhonePanel />}
       {section === "auto" && (
         <AutoPanel
           settings={auto}
@@ -1205,14 +1208,14 @@ function AutoPanel(props: {
             <Switch on={s.lock} set={(lock) => change({ lock })} />
           </div>
           <p className="muted">
-            {s.lock ? "Picks and bans are locked in for you." : "Champions are only hovered; you press Lock In."}
+            {s.lock ? "Hovers right away, then locks in during the last 5 seconds of your turn, after teammates' picks are checked." : "Champions are hovered right away; you press Lock In."}
           </p>
         </div>
       </section>
 
       <ChampionList
         title="Ban"
-        hint="Bans the first champion on this list that is still available."
+        hint="Bans the first champion on this list that is still available and that no teammate has hovered."
         ids={s.bans}
         champions={props.champions}
         portrait={props.portrait}

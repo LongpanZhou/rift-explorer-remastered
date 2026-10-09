@@ -25,6 +25,7 @@ import {
   parseAutoArgs,
 } from "./player";
 import { classify, EXIT, findLockfile } from "./sidecar";
+import { servePhone } from "./phone";
 
 /**
  * Sidecar entry point. Prints JSON on stdout and nothing else. Logs and errors
@@ -118,6 +119,12 @@ async function main(): Promise<void> {
     fail(err.code ?? EXIT.REQUEST_FAILED, err.message ?? String(err))
   );
   const lock: LockFile = await parse(lockfilePath).catch((err: any) => fail(EXIT.LOCKFILE_MALFORMED, err.message));
+  // "serve <port> <passcode>" runs the phone page until the app stops it.
+  if (positional[0] === "serve") {
+    await servePhone(lock, Number(positional[1]), positional[2] ?? "");
+    return;
+  }
+
   const work = positional[0] === "player" ? runPlayer(lock, positional.slice(1)) : createSpec(lock);
   const out = await work.catch((err) => {
     const { code, message } = classify(err);

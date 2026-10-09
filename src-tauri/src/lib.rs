@@ -1,4 +1,6 @@
 use serde::Serialize;
+use std::sync::Mutex;
+use tauri::Manager;
 use tauri_plugin_shell::ShellExt;
 
 /// An error returned to the UI. `code` is a sidecar exit code
@@ -63,11 +65,82 @@ async fn run_sidecar(app: &tauri::AppHandle, args: Vec<String>) -> Result<String
     }
 }
 
+/// The phone page's server process, if one is running.
+#[derive(Default)]
+struct PhoneServer(Mutex<Option<std::process::Child>>);
+
+/// Stops the phone server, if it is running.
+fn stop_phone(server: &PhoneServer) {
+    if let Some(mut child) = server.0.lock().unwrap_or_else(|e| e.into_inner()).take() {
+        let _ = child.kill();
+        let _ = child.wait();
+    }
+}
+
+/// The Mac's address on the local network, for the QR code. No packets are sent: a UDP
+/// socket only picks the route.
+#[tauri::command]
+fn phone_lan_ip() -> Result<String, SidecarError> {
+    let unavailable = |e: String| SidecarError { code: -1, message: e };
+    let socket = std::net::UdpSocket::bind("0.0.0.0:0")
+        .map_err(|e| unavailable(format!("no network socket: {e}")))?;
+    socket
+        .connect("8.8.8.8:80")
+        .map_err(|e| unavailable(format!("no network route: {e}")))?;
+    let addr = socket
+        .local_addr()
+        .map_err(|e| unavailable(format!("no local address: {e}")))?;
+    Ok(addr.ip().to_string())
+}
+
+/// Starts the phone page on `port`, guarded by a six-digit passcode. Replaces any server
+/// already running. On Windows the phone page is not available yet.
+#[tauri::command]
+fn phone_start(server: tauri::State<PhoneServer>, port: u16, passcode: String) -> Result<(), SidecarError> {
+    let unavailable = |e: String| SidecarError { code: -1, message: e };
+    if port < 1024 {
+        return Err(SidecarError { code: ACTION_REFUSED, message: "port must be 1024 or higher".into() });
+    }
+    if passcode.len() != 6 || !passcode.chars().all(|c| c.is_ascii_digit()) {
+        return Err(SidecarError { code: ACTION_REFUSED, message: "the passcode must be six digits".into() });
+    }
+    if cfg!(windows) {
+        return Err(unavailable("the phone page is not available on Windows yet".into()));
+    }
+    stop_phone(&server);
+    let exe = std::env::current_exe()
+        .map_err(|e| unavailable(format!("no app location: {e}")))?
+        .parent()
+        .ok_or_else(|| unavailable("no app folder".into()))?
+        .join("lcu-sidecar");
+    let child = std::process::Command::new(&exe)
+        .args(["serve", &port.to_string(), &passcode])
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .spawn()
+        .map_err(|e| unavailable(format!("could not start the phone page: {e}")))?;
+    *server.0.lock().unwrap_or_else(|e| e.into_inner()) = Some(child);
+    Ok(())
+}
+
+/// Stops the phone page.
+#[tauri::command]
+fn phone_stop(server: tauri::State<PhoneServer>) {
+    stop_phone(&server);
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
-    tauri::Builder::default()
+    let app = tauri::Builder::default()
         .plugin(tauri_plugin_shell::init())
-        .invoke_handler(tauri::generate_handler![get_spec, player])
-        .run(tauri::generate_context!())
-        .expect("error while running tauri application");
+        .manage(PhoneServer::default())
+        .invoke_handler(tauri::generate_handler![get_spec, player, phone_lan_ip, phone_start, phone_stop])
+        .build(tauri::generate_context!())
+        .expect("error while building tauri application");
+    app.run(|handle, event| {
+        if let tauri::RunEvent::Exit = event {
+            stop_phone(&handle.state::<PhoneServer>());
+        }
+    });
 }

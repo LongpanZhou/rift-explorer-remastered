@@ -701,6 +701,29 @@ export interface AutoTickResult {
  * couple of seconds while auto mode is on; each call does at most one thing.
  * It never overrides a champion you hovered yourself.
  */
+/**
+ * Champions no one else can take right now: anything locked or banned, anything a teammate
+ * is hovering or intends to play, and anything a teammate is about to ban. Enemy hovers do
+ * not block a pick, so they are not counted.
+ */
+export function takenBy(session: any, actions: any[], me: number): Set<number> {
+  const teamCells = new Set<number>((session.myTeam ?? []).map((p: any) => p.cellId));
+  return new Set<number>([
+    ...actions.filter((a: any) => a.completed && a.championId).map((a: any) => a.championId as number),
+    ...(session.bans?.myTeamBans ?? []),
+    ...(session.bans?.theirTeamBans ?? []),
+    ...actions
+      .filter((a: any) => a.actorCellId !== me && teamCells.has(a.actorCellId) && a.championId)
+      .map((a: any) => a.championId as number),
+    ...(session.myTeam ?? [])
+      .filter((p: any) => p.cellId !== me)
+      .flatMap((p: any) => [p.championId, p.championPickIntent]),
+  ]);
+}
+
+/** Seconds before the end of your turn at which a hover is locked in (ms). */
+const LOCK_WINDOW_MS = 5000;
+
 export async function autoTick(client: LcuClient, cfg: AutoConfig): Promise<AutoTickResult> {
   const phase: string = await client.get("/lol-gameflow/v1/gameflow-phase");
 
@@ -726,31 +749,33 @@ export async function autoTick(client: LcuClient, cfg: AutoConfig): Promise<Auto
   // Something you hovered yourself is left alone.
   if (mine.championId && !wanted.includes(mine.championId)) return idle(phase);
 
-  const taken = new Set<number>([
-    ...actions.filter((a) => a.completed).map((a) => a.championId as number),
-    ...(session.bans?.myTeamBans ?? []),
-    ...(session.bans?.theirTeamBans ?? []),
-    // Teammates' hovers, so you do not take a champion they plan to play.
-    ...(session.myTeam ?? [])
-      .filter((p: any) => p.cellId !== me)
-      .flatMap((p: any) => [p.championId, p.championPickIntent]),
-  ]);
-  // The allowed list is only needed when nothing is hovered yet.
-  const allowed = mine.championId
-    ? new Set<number>()
-    : new Set<number>(
-        await client.get(
-          mine.type === "ban" ? "/lol-champ-select/v1/bannable-champion-ids" : "/lol-champ-select/v1/pickable-champion-ids"
-        )
-      );
-  const choice = mine.championId || wanted.find((id) => allowed.has(id) && !taken.has(id));
+  // Lock in only during the last few seconds of your turn, so teammates' hovers have
+  // time to show before the choice is final. With no timer reading, lock at once.
+  const timeLeft = session.timer?.adjustedTimeLeftInPhase;
+  const lockNow = cfg.lock && (typeof timeLeft !== "number" || timeLeft <= LOCK_WINDOW_MS);
+
+  const taken = takenBy(session, actions, me);
+
+  // Keep your own hover while it is still free. If a teammate has since taken the same
+  // champion, move to the next one on the list.
+  const hovered: number = mine.championId || 0;
+  let choice: number | undefined = hovered && !taken.has(hovered) ? hovered : undefined;
+  if (!choice) {
+    const allowed = new Set<number>(
+      await client.get(
+        mine.type === "ban" ? "/lol-champ-select/v1/bannable-champion-ids" : "/lol-champ-select/v1/pickable-champion-ids"
+      )
+    );
+    choice = wanted.find((id) => allowed.has(id) && !taken.has(id));
+  }
   if (!choice) return idle(phase);
-  if (choice === mine.championId && !cfg.lock) return idle(phase);
+  // Already hovering the choice and not yet time to lock: nothing to do.
+  if (choice === hovered && !lockNow) return idle(phase);
 
   await client.patch(`/lol-champ-select/v1/session/actions/${mine.id}`, {
     championId: choice,
-    completed: cfg.lock,
+    completed: lockNow,
   });
-  const verb = mine.type === "ban" ? (cfg.lock ? "banned" : "hovered ban") : cfg.lock ? "locked in" : "hovered";
+  const verb = mine.type === "ban" ? (lockNow ? "banned" : "hovered ban") : lockNow ? "locked in" : "hovered";
   return { phase, did: `${verb} ${choice}`, championId: choice };
 }
