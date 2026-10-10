@@ -2,7 +2,7 @@ name: release
 
 # One file per platform, named for the app, the version and the platform:
 #   macOS (Apple Silicon)  APP_SLUG-VERSION-macos-arm64.dmg
-#   Windows (x64)          APP_SLUG-VERSION-windows-x64.zip   (unzip, then run the .exe)
+#   Windows (x64)          APP_SLUG-VERSION-windows-x64.exe   (one file, run it)
 #   Linux (x86_64)         APP_SLUG-VERSION-linux-x86_64.AppImage   (chmod +x, then run)
 # Runs when a version tag (v*) is pushed.
 
@@ -17,7 +17,7 @@ env:
   APP_SLUG: "Rift-Explorer-Remastered"
   APP_EXE: "rift-explorer-tauri"
   PRODUCT: "Rift Explorer Remastered"
-  NOTES: 'Downloads: macOS (Apple Silicon) .dmg, Windows .zip (unzip, then run the .exe), Linux .AppImage. Builds are unsigned.'
+  NOTES: 'Downloads: macOS (Apple Silicon) .dmg, Windows .exe, Linux .AppImage. Builds are unsigned.'
 
 jobs:
   create-release:
@@ -96,17 +96,13 @@ jobs:
           OUT="${APP_SLUG}-${VERSION}-${{ matrix.platform }}.AppImage"
           cp src-tauri/target/release/bundle/appimage/*.AppImage "$OUT"
           gh release upload "$GITHUB_REF_NAME" "$OUT" -R "$GITHUB_REPOSITORY" --clobber
-      - name: Publish the Windows zip (unzip, then run the .exe)
+      - name: Publish the Windows .exe
         if: runner.os == 'Windows'
         shell: pwsh
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           $version = $env:GITHUB_REF_NAME.TrimStart('v')
-          $dir = "portable"
-          New-Item -ItemType Directory -Force $dir | Out-Null
-          Copy-Item "src-tauri/target/release/$($env:APP_EXE).exe" "$dir/$($env:PRODUCT).exe"
-          Copy-Item "src-tauri/binaries/${{ matrix.sidecar }}" "$dir/lcu-sidecar.exe"
-          $out = "$($env:APP_SLUG)-$version-${{ matrix.platform }}.zip"
-          Compress-Archive -Path "$dir/*" -DestinationPath $out -Force
+          $out = "$($env:APP_SLUG)-$version-${{ matrix.platform }}.exe"
+          Copy-Item "src-tauri/target/release/$($env:APP_EXE).exe" $out
           gh release upload $env:GITHUB_REF_NAME $out -R $env:GITHUB_REPOSITORY --clobber
