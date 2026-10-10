@@ -1,23 +1,31 @@
-import { expect, test } from "bun:test";
-import { ActionRefused, type LcuClient } from "./player";
-import { handlePhone, phoneChoose, phoneSpells, phoneState, resetPasscodeFailures } from "./phone";
+import { beforeEach, expect, test } from "bun:test";
+import { ActionRefused } from "./player";
+import { handlePhone, phoneCancelQueue, phoneChoose, phoneLeaveLobby, phoneMode, phoneQueue, phoneReadyCheck, phoneSpells, phoneState, resetModeCache, type PhoneDeps } from "./phone";
+import { resetIconCache } from "./phoneIcons";
+import { resetRuneIconCache } from "./phoneRunes";
+import { fakeClient } from "./fakeClient";
 
-// A fake client: reads come from `gets`, writes are recorded in `writes`.
-function fakeClient(gets: Record<string, any>) {
-  const writes: { method: string; path: string; body: unknown }[] = [];
-  const client: LcuClient = {
-    get: async (p) => {
-      if (!(p in gets)) throw { response: { status: 404, data: { message: `no ${p}` } } };
-      return gets[p];
-    },
-    put: async (path, body) => void writes.push({ method: "PUT", path, body }),
-    post: async (path, body) => void writes.push({ method: "POST", path, body }),
-    patch: async (path, body) => void writes.push({ method: "PATCH", path, body }),
-    getBytes: async () => new Uint8Array(),
+beforeEach(() => {
+  resetIconCache();
+  resetRuneIconCache();
+  resetModeCache();
+});
+
+// A Data Dragon stub. It answers like the site and records every URL it is asked for.
+// With `down`, every request fails with a 500.
+function ddragon(down = false) {
+  const urls: string[] = [];
+  const fetch = async (url: string) => {
+    urls.push(url);
+    if (down) return new Response("down", { status: 500 });
+    if (url.endsWith("/api/versions.json")) return Response.json(["16.1.1", "16.0.1"]);
+    if (url.endsWith("/summoner.json")) return Response.json(SUMMONER_JSON);
+    return new Response(new Uint8Array([137, 80, 78, 71]), { headers: { "content-type": "image/png" } });
   };
-  return { client, writes };
+  return { fetch, urls };
 }
 
+const MAC = "http://mac.local:8787";
 const PHASE = "/lol-gameflow/v1/gameflow-phase";
 const SESSION = "/lol-champ-select/v1/session";
 const PICKABLE = "/lol-champ-select/v1/pickable-champion-ids";
@@ -25,55 +33,123 @@ const BANNABLE = "/lol-champ-select/v1/bannable-champion-ids";
 const NAMES = "/lol-game-data/assets/v1/champion-summary.json";
 const SELECTION = "/lol-champ-select/v1/session/my-selection";
 const SWAPS = "/lol-champ-select/v1/session/champion-swaps";
+const PAGES = "/lol-perks/v1/pages";
+const DISALLOWED = "/lol-gameflow/v1/session/per-position-summoner-spells/disallowed";
+const ACTION = "/lol-champ-select/v1/session/actions/7";
+
+// Mark is an ARAM-only spell, so the spell list must leave it out.
+const SUMMONER_JSON = {
+  data: {
+    SummonerFlash: { id: "SummonerFlash", key: "4", name: "Flash", image: { full: "SummonerFlash.png" }, modes: ["CLASSIC", "ARAM"] },
+    SummonerDot: { id: "SummonerDot", key: "14", name: "Ignite", image: { full: "SummonerDot.png" }, modes: ["CLASSIC", "ARAM"] },
+    SummonerSnowball: { id: "SummonerSnowball", key: "32", name: "Mark", image: { full: "SummonerSnowball.png" }, modes: ["KIWI", "ARAM"] },
+  },
+};
 
 const turnPick = { id: 7, actorCellId: 2, type: "pick", isInProgress: true, completed: false, championId: 0 };
 const team = [
-  { cellId: 2, championId: 0, championPickIntent: 0 },
-  { cellId: 3, championId: 0, championPickIntent: 3 },
+  { cellId: 2, championId: 0, championPickIntent: 0, assignedPosition: "middle", spell1Id: 4, spell2Id: 14 },
+  { cellId: 3, championId: 0, championPickIntent: 3, assignedPosition: "jungle" },
 ];
 const session = (actions: any[][], extra: any = {}) => ({
   localPlayerCellId: 2,
   actions,
   myTeam: team,
-  theirTeam: [{ championId: 9 }],
+  theirTeam: [
+    { cellId: 6, championId: 9 },
+    { cellId: 7, championId: 0 },
+  ],
   bans: { myTeamBans: [], theirTeamBans: [] },
+  timer: { adjustedTimeLeftInPhase: 25000 },
   ...extra,
 });
+const PAGES_LIST = [
+  { id: 11, name: "Mage", current: false, isEditable: true, primaryStyleId: 8100, subStyleId: 8200, selectedPerkIds: [8112] },
+  { id: 12, name: "Fixed", current: true, isEditable: false, primaryStyleId: 8000, subStyleId: 8100, selectedPerkIds: [8005] },
+];
 const world = (actions: any[][], extra: any = {}) => ({
   [PHASE]: "ChampSelect",
   [SESSION]: session(actions, extra),
   [PICKABLE]: [1, 2, 3],
   [BANNABLE]: [1, 2, 3],
   [NAMES]: [
-    { id: 1, name: "Annie" },
-    { id: 2, name: "Olaf" },
-    { id: 3, name: "Galio" },
-    { id: 9, name: "Ahri" },
+    { id: 1, name: "Annie", alias: "Annie", roles: ["mage"] },
+    { id: 2, name: "Olaf", alias: "Olaf", roles: ["fighter"] },
+    { id: 3, name: "Galio", alias: "Galio", roles: ["tank", "mage"] },
+    { id: 9, name: "Ahri", alias: "Ahri" },
   ],
   [SELECTION]: { spell1Id: 4, spell2Id: 14 },
   [SWAPS]: [],
+  [PAGES]: PAGES_LIST,
+  [DISALLOWED]: [14],
 });
+
+/** A request to the Mac. */
+function req(path: string, init: { body?: unknown } = {}) {
+  return new Request(`${MAC}${path}`, {
+    method: init.body === undefined ? "GET" : "POST",
+    body: init.body === undefined ? undefined : JSON.stringify(init.body),
+  });
+}
+
+/** Deps for the handler over a fake client, with a Data Dragon stub. */
+function setup(gets: Record<string, any>, dragon = ddragon()) {
+  const { client, writes } = fakeClient(gets);
+  const deps: PhoneDeps = { client, fetch: dragon.fetch };
+  return { writes, dragon, deps };
+}
 
 test("state shows names, your turn and options; outside champ select it says so", async () => {
   const { client } = fakeClient(world([[turnPick]]));
-  const state: any = await phoneState(client);
+  const state: any = await phoneState(client, ddragon().fetch);
   expect(state.inChampSelect).toBe(true);
-  expect(state.turn).toEqual({ id: 7, type: "pick", championId: 0, name: "" });
+  expect(state.turn).toEqual({ championId: 0 });
+  expect(state.timer).toEqual({ leftMs: 25000, phase: "pick" });
   expect(state.options).toEqual([
-    { id: 1, name: "Annie" },
-    { id: 2, name: "Olaf" },
-    { id: 3, name: "Galio" },
+    { id: 1, name: "Annie", alias: "Annie", roles: ["mage"] },
+    { id: 2, name: "Olaf", alias: "Olaf", roles: ["fighter"] },
+    { id: 3, name: "Galio", alias: "Galio", roles: ["tank", "mage"] },
   ]);
-  expect(state.enemies).toEqual(["Ahri"]);
   expect(state.spells).toEqual({ spell1: 4, spell2: 14 });
   const outside = await phoneState(fakeClient({ [PHASE]: "Lobby" }).client);
-  expect(outside).toEqual({ phase: "Lobby", inChampSelect: false });
+  expect(outside).toEqual({ phase: "Lobby", inChampSelect: false, search: null, readyCheck: null, lobby: null });
+});
+
+test("state includes the team, bans, enemies, spell list, runes and swaps", async () => {
+  const annieLocked = { id: 8, actorCellId: 3, type: "pick", isInProgress: false, completed: true, championId: 1 };
+  const { client } = fakeClient(
+    world([[turnPick], [annieLocked]], {
+      myTeam: [
+        team[0],
+        { cellId: 3, championId: 1, championPickIntent: 0, assignedPosition: "jungle" },
+        { cellId: 4, championId: 0, championPickIntent: 3, assignedPosition: "utility" },
+      ],
+      bans: { myTeamBans: [0, 2], theirTeamBans: [9] },
+    })
+  );
+  const state: any = await phoneState(client, ddragon().fetch);
+  expect(state.team).toEqual([
+    { cellId: 2, mine: true, championId: 0, name: "", alias: "", position: "MID", spells: { spell1: 4, spell2: 14 }, locked: false, hovering: false, swappable: false },
+    { cellId: 3, mine: false, championId: 1, name: "Annie", alias: "Annie", position: "JGL", spells: null, locked: true, hovering: false, swappable: true },
+    { cellId: 4, mine: false, championId: 3, name: "Galio", alias: "Galio", position: "SUP", spells: null, locked: false, hovering: true, swappable: true },
+  ]);
+  expect(state.bans).toEqual({ mine: [{ id: 2, name: "Olaf", alias: "Olaf" }], theirs: [{ id: 9, name: "Ahri", alias: "Ahri" }] });
+  expect(state.enemies).toEqual([
+    { cellId: 6, championId: 9, name: "Ahri", alias: "Ahri" },
+    { cellId: 7, championId: 0, name: "", alias: "" },
+  ]);
+  expect(state.spellList).toEqual([
+    { id: 4, name: "Flash", file: "SummonerFlash.png", disallowed: false },
+    { id: 14, name: "Ignite", file: "SummonerDot.png", disallowed: true },
+  ]);
+  expect(state.runes).toEqual({ current: { id: 12, name: "Fixed" } });
+  expect(state.swaps).toEqual([]);
 });
 
 test("choose hovers, locks, and refuses a champion a teammate has or is not allowed", async () => {
   const hover = fakeClient(world([[turnPick]]));
   await phoneChoose(hover.client, 2, false);
-  expect(hover.writes[0]).toEqual({ method: "PATCH", path: "/lol-champ-select/v1/session/actions/7", body: { championId: 2, completed: false } });
+  expect(hover.writes[0]).toEqual({ method: "PATCH", path: ACTION, body: { championId: 2, completed: false } });
 
   const lock = fakeClient(world([[turnPick]]));
   await phoneChoose(lock.client, 2, true);
@@ -88,6 +164,19 @@ test("choose hovers, locks, and refuses a champion a teammate has or is not allo
   await expect(phoneChoose(fakeClient(world([[turnPick]])).client, 99, true)).rejects.toBeInstanceOf(ActionRefused);
 });
 
+test("a lock with no champion locks the one already hovered, and refuses when nothing is hovered", async () => {
+  const hovering = setup(world([[{ ...turnPick, championId: 2 }]]));
+  const locked = await handlePhone(req("/api/choose", { body: { lock: true } }), hovering.deps);
+  expect(locked.status).toBe(200);
+  expect(hovering.writes[0]).toEqual({ method: "PATCH", path: ACTION, body: { championId: 2, completed: true } });
+
+  const none = setup(world([[turnPick]]));
+  const refused = await handlePhone(req("/api/choose", { body: { lock: true } }), none.deps);
+  expect(refused.status).toBe(422);
+  expect((await refused.json()).error).toBe("hover a champion first");
+  expect(none.writes).toHaveLength(0);
+});
+
 test("spells must be two different ids and are sent as the client expects", async () => {
   const { client, writes } = fakeClient({});
   await expect(phoneSpells(client, 4, 4)).rejects.toBeInstanceOf(ActionRefused);
@@ -95,34 +184,263 @@ test("spells must be two different ids and are sent as the client expects", asyn
   expect(writes[0]).toEqual({ method: "PATCH", path: SELECTION, body: { spell1Id: 4, spell2Id: 14 } });
 });
 
-test("requests without the right passcode are refused, and the page is served without it", async () => {
-  const deps = { client: fakeClient(world([[turnPick]])).client, passcode: "482913" };
-  const page = await handlePhone(new Request("http://mac.local:8787/"), deps);
-  expect(page.status).toBe(200);
-  expect(await page.text()).toContain("Champion select");
-  const bad = await handlePhone(new Request("http://mac.local:8787/api/state", { headers: { "x-passcode": "000000" } }), deps);
-  expect(bad.status).toBe(401);
-  const good = await handlePhone(new Request("http://mac.local:8787/api/state", { headers: { "x-passcode": "482913" } }), deps);
-  expect(good.status).toBe(200);
-  expect((await good.json()).inChampSelect).toBe(true);
+test("a spell the position may not use is refused with 422, and nothing is sent", async () => {
+  // List form (the default world): Ignite (14) is refused.
+  const list = setup(world([[turnPick]]));
+  const refused = await handlePhone(req("/api/spells", { body: { spell1: 4, spell2: 14 } }), list.deps);
+  expect(refused.status).toBe(422);
+  expect((await refused.json()).error).toBe("that spell is not allowed for your position");
+  expect(list.writes).toHaveLength(0);
+
+  // By-position form: this player is MID, so Flash (4) is refused.
+  const byPosition = setup({ ...world([[turnPick]]), [DISALLOWED]: { top: [14], middle: [4] } });
+  const refusedByPosition = await handlePhone(req("/api/spells", { body: { spell1: 4, spell2: 14 } }), byPosition.deps);
+  expect(refusedByPosition.status).toBe(422);
+  expect(byPosition.writes).toHaveLength(0);
 });
 
-test("after 20 wrong passcodes the server refuses for a minute, even the right one", async () => {
-  const deps = { client: fakeClient({}).client, passcode: "111111" };
-  for (let i = 0; i < 20; i++) {
-    await handlePhone(new Request("http://mac.local:8787/api/state", { headers: { "x-passcode": "wrong" } }), deps);
-  }
-  const blocked = await handlePhone(new Request("http://mac.local:8787/api/state", { headers: { "x-passcode": "111111" } }), deps);
-  expect(blocked.status).toBe(429);
+test("a request with no passcode is served: the page and the API", async () => {
+  const s = setup(world([[turnPick]]));
+  const page = await handlePhone(new Request(`${MAC}/`), s.deps);
+  expect(page.status).toBe(200);
+  expect(await page.text()).toContain("<title>Champ select</title>");
+  const state = await handlePhone(req("/api/state"), s.deps);
+  expect(state.status).toBe(200);
+  expect((await state.json()).inChampSelect).toBe(true);
 });
 
 test("a client that is not running is reported as such, not as a connection error", async () => {
-  resetPasscodeFailures();
   const deps = {
     client: { ...fakeClient({}).client, get: async () => { throw { code: "ECONNREFUSED" }; } } as LcuClient,
-    passcode: "482913",
   };
-  const res = await handlePhone(new Request("http://mac.local:8787/api/state", { headers: { "x-passcode": "482913" } }), deps);
+  const res = await handlePhone(req("/api/state"), deps);
   expect(res.status).toBe(502);
   expect((await res.json()).error).toBe("League client not running");
+});
+
+test("switching rune pages sends the page back as current, and refuses one that is not editable or missing", async () => {
+  const s = setup(world([[turnPick]]));
+  const switched = await handlePhone(req("/api/rune", { body: { id: 11 } }), s.deps);
+  expect(switched.status).toBe(200);
+  expect(s.writes[0]).toEqual({ method: "PUT", path: "/lol-perks/v1/pages/11", body: { ...PAGES_LIST[0], current: true } });
+
+  const notEditable = await handlePhone(req("/api/rune", { body: { id: 12 } }), s.deps);
+  expect(notEditable.status).toBe(422);
+  const missing = await handlePhone(req("/api/rune", { body: { id: 99 } }), s.deps);
+  expect(missing.status).toBe(422);
+  expect(s.writes).toHaveLength(1);
+});
+
+test("champion and spell icons are served with no passcode", async () => {
+  const s = setup(world([[turnPick]]));
+  const champion = await handlePhone(req("/icon/champion/Annie.png"), s.deps);
+  expect(champion.status).toBe(200);
+  expect(champion.headers.get("content-type")).toBe("image/png");
+  expect(champion.headers.get("cache-control")).toBe("private, max-age=86400");
+
+  const spell = await handlePhone(req("/icon/spell/SummonerFlash.png"), s.deps);
+  expect(spell.status).toBe(200);
+});
+
+test("an icon name that is not a plain alias or spell file is 404, and Data Dragon is never asked", async () => {
+  const s = setup(world([[turnPick]]));
+  // The URL parser folds "../" away, so "../x" lands on a path that names no icon.
+  for (const path of ["/icon/champion/..%2Fx.png", "/icon/champion/../x.png", "/icon/spell/../x", "/icon/spell/SummonerFlash.exe", "/icon/spell/Summoner-Flash.png"]) {
+    const res = await handlePhone(req(path), s.deps);
+    expect(res.status).toBe(404);
+  }
+  expect(s.dragon.urls).toHaveLength(0);
+});
+
+test("spell files with underscores are served", async () => {
+  const s = setup(world([[turnPick]]));
+  const res = await handlePhone(req("/icon/spell/Summoner_UltBookPlaceholder.png"), s.deps);
+  expect(res.status).toBe(200);
+  expect(s.dragon.urls.some((u: string) => u.endsWith("/img/spell/Summoner_UltBookPlaceholder.png"))).toBe(true);
+});
+
+test("an icon is fetched once and then kept in memory", async () => {
+  const s = setup(world([[turnPick]]));
+  expect((await handlePhone(req("/icon/champion/Annie.png"), s.deps)).status).toBe(200);
+  // The version list, then the icon.
+  expect(s.dragon.urls).toHaveLength(2);
+  expect((await handlePhone(req("/icon/champion/Annie.png"), s.deps)).status).toBe(200);
+  expect(s.dragon.urls).toHaveLength(2);
+});
+
+test("an icon Data Dragon cannot give is a 502 with a JSON error", async () => {
+  const s = setup(world([[turnPick]]), ddragon(true));
+  const res = await handlePhone(req("/icon/champion/Annie.png"), s.deps);
+  expect(res.status).toBe(502);
+  expect((await res.json()).error).toBe("icon unavailable");
+});
+
+// Rune fixtures, as the client lists them: five trees, each with a keystone slot, three rune rows
+// and the stat shard rows. Precision with Domination is a legal page.
+const RUNE_TREES: [number, string, number[], number[][]][] = [
+  [8000, "Precision", [8005, 8008], [[9101, 9111, 8009], [9104, 9105, 9103], [8014, 8017, 8299]]],
+  [8100, "Domination", [8128], [[8126, 8139, 8135], [8105, 8106, 8138], [8134, 8120, 8143]]],
+  [8200, "Sorcery", [8214, 8229, 8230], [[8224, 8226, 8210], [8237, 8233, 8236], [8242, 8234, 8232]]],
+  [8300, "Inspiration", [8351, 8360, 8369], [[8306, 8304, 8313], [8321, 8316, 8345], [8347, 8410, 8352]]],
+  [8400, "Resolve", [8437, 8439, 8465], [[8446, 8429, 8451], [8444, 8473, 8453], [8463, 8401, 8475]]],
+];
+const RUNE_SHARDS = [
+  [5005, 5008, 5007],
+  [5008, 5002, 5003],
+  [5001, 5002, 5003],
+];
+const RUNE_STYLES = RUNE_TREES.map(([id, name, keystones, rows]) => ({
+  id,
+  name,
+  iconPath: `/lol-game-data/assets/v1/perk-images/styles/${name.toLowerCase()}/${name.toLowerCase()}.png`,
+  allowedSubStyles: RUNE_TREES.map(([x]) => x).filter((x) => x !== id),
+  defaultSubStyle: RUNE_TREES.find(([x]) => x !== id)?.[0],
+  slots: [
+    { type: "kKeyStone", perks: keystones },
+    ...rows.map((perks) => ({ type: "kMixedRegularSplashable", perks })),
+    ...RUNE_SHARDS.map((perks) => ({ type: "kStatMod", perks })),
+  ],
+}));
+const RUNE_PERKS = [...new Set(RUNE_STYLES.flatMap((s) => s.slots.flatMap((x) => x.perks)))].map((id) => ({
+  id,
+  name: `Rune ${id}`,
+  iconPath: `/lol-game-data/assets/v1/Perk-Images/${id}.png`,
+}));
+const RUNE_VALID = [8005, 9101, 9104, 8014, 8126, 8105, 5007, 5002, 5001];
+const RUNE_PAGES = [
+  { id: 12, name: "Fixed", current: true, isEditable: false, primaryStyleId: 8000, subStyleId: 8100, selectedPerkIds: RUNE_VALID },
+  { id: 13, name: "Ekko", current: false, isEditable: true, primaryStyleId: 8000, subStyleId: 8100, selectedPerkIds: RUNE_VALID },
+];
+
+/** Deps over a fake client that has the rune fixtures. */
+function runeSetup() {
+  return setup({ [PAGES]: RUNE_PAGES, "/lol-perks/v1/perks": RUNE_PERKS, "/lol-perks/v1/styles": RUNE_STYLES });
+}
+
+test("the queue and a found match show outside champ select", async () => {
+  const searching = await phoneState(
+    fakeClient({
+      [PHASE]: "Matchmaking",
+      "/lol-matchmaking/v1/search": { searchState: "Searching", timeInQueue: 12.4, estimatedQueueTime: 45 },
+    }).client
+  );
+  expect(searching).toMatchObject({ phase: "Matchmaking", search: { searching: true, timeInQueue: 12.4, estimatedQueueTime: 45 }, readyCheck: null });
+  const found = await phoneState(
+    fakeClient({ [PHASE]: "ReadyCheck", "/lol-matchmaking/v1/ready-check": { playerResponse: "None", timer: 9.5 } }).client
+  );
+  expect(found).toMatchObject({ phase: "ReadyCheck", search: null, readyCheck: { response: "None", secondsLeft: 9.5 } });
+});
+
+test("accept and decline answer a found match once, and are refused when none is waiting", async () => {
+  const found = fakeClient({ [PHASE]: "ReadyCheck", "/lol-matchmaking/v1/ready-check": { state: "InProgress", playerResponse: "None" } });
+  await phoneReadyCheck(found.client, "accept");
+  expect(found.writes).toEqual([{ method: "POST", path: "/lol-matchmaking/v1/ready-check/accept", body: {} }]);
+  const answered = fakeClient({ [PHASE]: "ReadyCheck", "/lol-matchmaking/v1/ready-check": { state: "InProgress", playerResponse: "Accepted" } });
+  await expect(phoneReadyCheck(answered.client, "accept")).rejects.toBeInstanceOf(ActionRefused);
+  expect(answered.writes).toHaveLength(0);
+  const lobby = fakeClient({ [PHASE]: "Lobby" });
+  await expect(phoneReadyCheck(lobby.client, "decline")).rejects.toBeInstanceOf(ActionRefused);
+  expect(lobby.writes).toHaveLength(0);
+});
+
+test("queue up starts the search from a lobby, and cancel ends it from a queue", async () => {
+  const lobby = fakeClient({ [PHASE]: "Lobby" });
+  await phoneQueue(lobby.client);
+  expect(lobby.writes).toEqual([{ method: "POST", path: "/lol-lobby/v2/lobby/matchmaking/search", body: {} }]);
+  await expect(phoneQueue(fakeClient({ [PHASE]: "ChampSelect" }).client)).rejects.toBeInstanceOf(ActionRefused);
+  const queue = fakeClient({ [PHASE]: "Matchmaking" });
+  await phoneCancelQueue(queue.client);
+  expect(queue.writes).toEqual([{ method: "DELETE", path: "/lol-lobby/v2/lobby/matchmaking/search", body: undefined }]);
+  await expect(phoneCancelQueue(fakeClient({ [PHASE]: "Lobby" }).client)).rejects.toBeInstanceOf(ActionRefused);
+});
+
+// Queues as the client lists them: one available Summoner's Rift mode, one ARAM, and one turned off.
+const QUEUES = [
+  { id: 400, description: "Draft Pick", category: "PvP", gameSelectModeGroup: "kSummonersRift", queueAvailability: "Available" },
+  { id: 450, description: "ARAM", category: "PvP", gameSelectModeGroup: "kARAM", queueAvailability: "Available" },
+  { id: 490, description: "Quickplay", category: "PvP", gameSelectModeGroup: "kSummonersRift", queueAvailability: "PlatformDisabled" },
+];
+const LOBBY = "/lol-lobby/v2/lobby";
+
+test("the lobby shows its mode and the modes you can switch to", async () => {
+  const state: any = await phoneState(fakeClient({ [PHASE]: "Lobby", [LOBBY]: { gameConfig: { queueId: 400 } }, "/lol-game-queues/v1/queues": QUEUES }).client);
+  expect(state.lobby).toEqual({ queueId: 400, modes: [{ id: 400, name: "Draft Pick" }, { id: 450, name: "ARAM" }] });
+});
+
+test("switching mode posts the new queue from the lobby, and refuses a mode that is not offered", async () => {
+  const lobby = fakeClient({ [PHASE]: "Lobby", "/lol-game-queues/v1/queues": QUEUES });
+  await phoneMode(lobby.client, 450);
+  expect(lobby.writes).toEqual([{ method: "POST", path: LOBBY, body: { queueId: 450 } }]);
+  await expect(phoneMode(fakeClient({ [PHASE]: "Lobby", "/lol-game-queues/v1/queues": QUEUES }).client, 490)).rejects.toBeInstanceOf(ActionRefused);
+  const queue = fakeClient({ [PHASE]: "Matchmaking", "/lol-game-queues/v1/queues": QUEUES });
+  await expect(phoneMode(queue.client, 450)).rejects.toBeInstanceOf(ActionRefused);
+  expect(queue.writes).toHaveLength(0);
+});
+
+test("leaving the lobby deletes it, and is refused during a search", async () => {
+  const lobby = fakeClient({ [PHASE]: "Lobby" });
+  await phoneLeaveLobby(lobby.client);
+  expect(lobby.writes).toEqual([{ method: "DELETE", path: LOBBY, body: undefined }]);
+  const queue = fakeClient({ [PHASE]: "Matchmaking" });
+  await expect(phoneLeaveLobby(queue.client)).rejects.toBeInstanceOf(ActionRefused);
+  expect(queue.writes).toHaveLength(0);
+});
+
+test("a swap whose action is not request or accept is refused, and nothing is sent", async () => {
+  const s = setup(world([[turnPick]]));
+  const res = await handlePhone(req("/api/swap", { body: { action: "accept/../../lol-x", id: 3 } }), s.deps);
+  expect(res.status).toBe(422);
+  expect(s.writes).toHaveLength(0);
+});
+
+test("the rune data for the phone lists the pages, five trees, the shards and the names", async () => {
+  const s = runeSetup();
+  const res = await handlePhone(req("/api/runes"), s.deps);
+  expect(res.status).toBe(200);
+  const data = await res.json();
+  expect(data.pages).toHaveLength(2);
+  expect(data.trees).toHaveLength(5);
+  expect(data.trees[0]).toEqual({ id: 8000, name: "Precision", keystones: [8005, 8008], rows: RUNE_TREES[0][3] });
+  expect(data.shards).toEqual(RUNE_SHARDS);
+  expect(data.names["8000"]).toEqual({ name: "Precision", icon: "/icon/rune/8000.png" });
+  expect(data.names["8005"]).toEqual({ name: "Rune 8005", icon: "/icon/rune/8005.png" });
+});
+
+test("a rune save that breaks the rules is 422 with the reason, and nothing is sent", async () => {
+  const s = runeSetup();
+  // Two secondary runes from the same Domination row.
+  const twoFromOneRow = [8005, 9101, 9104, 8014, 8126, 8139, 5007, 5002, 5001];
+  const res = await handlePhone(req("/api/rune-save", { body: { id: 13, name: "Ekko", primaryStyleId: 8000, subStyleId: 8100, perks: twoFromOneRow } }), s.deps);
+  expect(res.status).toBe(422);
+  expect((await res.json()).error).toBe("pick two secondary runes from different rows");
+  expect(s.writes).toHaveLength(0);
+});
+
+test("a legal rune save is 200 with ok, and sends one PUT to that page", async () => {
+  const s = runeSetup();
+  const res = await handlePhone(req("/api/rune-save", { body: { id: 13, name: "Ekko", primaryStyleId: 8000, subStyleId: 8100, perks: RUNE_VALID } }), s.deps);
+  expect(res.status).toBe(200);
+  expect(await res.json()).toEqual({ ok: true });
+  expect(s.writes).toEqual([
+    {
+      method: "PUT",
+      path: "/lol-perks/v1/pages/13",
+      body: { name: "Ekko", primaryStyleId: 8000, subStyleId: 8100, selectedPerkIds: RUNE_VALID, current: false },
+    },
+  ]);
+});
+
+test("a rune icon with no known id is 404, and nothing is fetched for it", async () => {
+  const s = runeSetup();
+  const res = await handlePhone(req("/icon/rune/99999.png"), s.deps);
+  expect(res.status).toBe(404);
+  expect(s.dragon.urls).toHaveLength(0);
+});
+
+test("a known rune icon is served as a PNG, fetched from CommunityDragon", async () => {
+  const s = runeSetup();
+  const res = await handlePhone(req("/icon/rune/8005.png"), s.deps);
+  expect(res.status).toBe(200);
+  expect(res.headers.get("content-type")).toBe("image/png");
+  expect(s.dragon.urls).toContain("https://raw.communitydragon.org/latest/plugins/rcp-be-lol-game-data/global/default/v1/perk-images/8005.png");
 });

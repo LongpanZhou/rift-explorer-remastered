@@ -93,16 +93,13 @@ fn phone_lan_ip() -> Result<String, SidecarError> {
     Ok(addr.ip().to_string())
 }
 
-/// Starts the phone page on `port`, guarded by a six-digit passcode. Replaces any server
-/// already running. On Windows the phone page is not available yet.
+/// Starts the phone page on `port`. Replaces any server already running. On Windows the
+/// phone page is not available yet.
 #[tauri::command]
-fn phone_start(server: tauri::State<PhoneServer>, port: u16, passcode: String) -> Result<(), SidecarError> {
+fn phone_start(server: tauri::State<PhoneServer>, port: u16) -> Result<(), SidecarError> {
     let unavailable = |e: String| SidecarError { code: -1, message: e };
     if port < 1024 {
         return Err(SidecarError { code: ACTION_REFUSED, message: "port must be 1024 or higher".into() });
-    }
-    if passcode.len() != 6 || !passcode.chars().all(|c| c.is_ascii_digit()) {
-        return Err(SidecarError { code: ACTION_REFUSED, message: "the passcode must be six digits".into() });
     }
     if cfg!(windows) {
         return Err(unavailable("the phone page is not available on Windows yet".into()));
@@ -114,7 +111,7 @@ fn phone_start(server: tauri::State<PhoneServer>, port: u16, passcode: String) -
         .ok_or_else(|| unavailable("no app folder".into()))?
         .join("lcu-sidecar");
     let child = std::process::Command::new(&exe)
-        .args(["serve", &port.to_string(), &passcode])
+        .args(["serve", &port.to_string()])
         .stdin(std::process::Stdio::null())
         .stdout(std::process::Stdio::null())
         .stderr(std::process::Stdio::null())

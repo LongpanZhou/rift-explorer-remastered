@@ -17,6 +17,7 @@ export interface LcuClient {
   put(path: string, body: unknown): Promise<any>;
   post(path: string, body: unknown): Promise<any>;
   patch(path: string, body: unknown): Promise<any>;
+  delete(path: string): Promise<any>;
   /** Raw bytes, for image assets. */
   getBytes(path: string): Promise<Uint8Array>;
 }
@@ -37,6 +38,7 @@ export function lcuClient(lock: Pick<LockFile, "address" | "port" | "password">)
     put: (p, b) => http.put(p, b).then((r) => r.data),
     post: (p, b) => http.post(p, b).then((r) => r.data),
     patch: (p, b) => http.patch(p, b).then((r) => r.data),
+    delete: (p) => http.delete(p).then((r) => r.data),
     getBytes: (p) =>
       http.get(p, { responseType: "arraybuffer" }).then((r) => new Uint8Array(r.data)),
   };
@@ -509,64 +511,116 @@ export async function loadLoot(client: LcuClient) {
   };
 }
 
-const PAGES = "/lol-perks/v1/pages";
-const RUNE_PAGE_ITEM = "inventoryType=SPELL_BOOK_PAGE&itemId=1";
+export const PAGES = "/lol-perks/v1/pages";
+export const PERKS = "/lol-perks/v1/perks";
+export const STYLES = "/lol-perks/v1/styles";
+const STORE_LANG = "en_US";
+
+/** One rune page as the phone and the desktop editor both read it. */
+export function runePage(p: any) {
+  return {
+    id: p.id as number,
+    name: p.name as string,
+    current: Boolean(p.current),
+    editable: Boolean(p.isEditable),
+    primaryStyleId: p.primaryStyleId as number,
+    subStyleId: p.subStyleId as number,
+    selectedPerkIds: (p.selectedPerkIds ?? []) as number[],
+  };
+}
 
 /** Rune pages with names for every rune, plus what buying one more page costs. */
 export async function loadRunes(client: LcuClient) {
-  const [pages, perks, styles, inventory, store, purchasable] = await Promise.all([
+  const [pages, perks, styles, inventory, offer] = await Promise.all([
     client.get(PAGES) as Promise<any[]>,
-    client.get("/lol-perks/v1/perks") as Promise<any[]>,
-    client.get("/lol-perks/v1/styles") as Promise<any[]>,
+    client.get(PERKS) as Promise<any[]>,
+    client.get(STYLES) as Promise<any[]>,
     client.get("/lol-perks/v1/inventory"),
-    client.get("/lol-store/v1/catalog?inventoryType=%5B%22SPELL_BOOK_PAGE%22%5D").catch(() => []),
-    client.get(`/lol-purchase-widget/v1/purchasable-item?${RUNE_PAGE_ITEM}`).catch(() => null),
+    runePageOffer(client).catch(() => null),
   ]);
   return {
-    pages: pages.map((p) => ({
-      id: p.id as number,
-      name: p.name as string,
-      current: Boolean(p.current),
-      editable: Boolean(p.isEditable),
-      primaryStyleId: p.primaryStyleId as number,
-      subStyleId: p.subStyleId as number,
-      selectedPerkIds: p.selectedPerkIds as number[],
-    })),
+    pages: pages.map(runePage),
     perks: Object.fromEntries(
       perks.map((p) => [p.id, { name: p.name as string, icon: p.iconPath as string, desc: (p.shortDesc ?? "") as string }])
     ),
     styles: stylesById(styles),
     ownedPages: inventory.ownedPageCount as number,
     canAddPage: Boolean(inventory.canAddCustomPage),
-    buy: {
-      /** Store list prices; IP is blue essence. */
-      prices: ((store as any[])[0]?.prices ?? []).map((p: any) => ({ currency: p.currency as string, cost: p.cost as number })),
-      /** Currencies the client will accept right now; empty when it refuses the purchase. */
-      options: purchaseOptions(purchasable).map((o) => o.price.currencyType as string),
-      blockedBy: ((purchasable?.validationErrors ?? []) as any[]).map((e) => e.id as string),
-    },
+    buy: buyInfo(offer),
   };
 }
 
-function purchaseOptions(purchasable: any): any[] {
-  return ((purchasable?.purchaseOptions ?? []) as any[]).flatMap((o) => o.priceDetails ?? []);
+/**
+ * The store's own service, the one its page uses: its address, and the account's token from the
+ * client. The token is only put in the request header and never returned or logged.
+ */
+async function storeSession(client: LcuClient) {
+  const [base, { token }] = await Promise.all([
+    client.get("/lol-store/v1/getStoreUrl") as Promise<string>,
+    client.get("/lol-rso-auth/v1/authorization/access-token"),
+  ]);
+  return {
+    base,
+    headers: { Authorization: `Bearer ${token}`, Accept: "application/json", "Content-Type": "application/json" },
+  };
+}
+
+/** The rune page as the store sells it: its BE and RP prices, and whether one more can be bought now. */
+async function runePageOffer(client: LcuClient, fetchFn: typeof fetch = fetch) {
+  const { base, headers } = await storeSession(client);
+  const res = await fetchFn(`${base}/storefront/v3/view/runes?language=${STORE_LANG}`, { headers });
+  if (!res.ok) throw new Error(`the store did not answer (${res.status})`);
+  const view: any = await res.json();
+  const page = (view.catalog ?? []).find((e: any) => e.itemId === 1 && e.inventoryType === "SPELL_BOOK_PAGE");
+  return {
+    base,
+    headers,
+    accountId: view.player?.accountId as number,
+    ip: (page?.ip ?? 0) as number,
+    rp: (page?.rp ?? 0) as number,
+    limitReached: Boolean(page?.purchaseLimitReached),
+  };
+}
+
+/** What the rune page card shows: the prices, the currencies that can be spent now, and why not. */
+function buyInfo(offer: Awaited<ReturnType<typeof runePageOffer>> | null) {
+  if (!offer) return { prices: [], options: [], reason: "the store could not be reached" };
+  const prices = [
+    { currency: "IP", cost: offer.ip },
+    { currency: "RP", cost: offer.rp },
+  ].filter((p) => p.cost > 0);
+  const reason = offer.limitReached ? "purchase limit reached" : prices.length ? null : "the store lists no price";
+  return { prices, options: reason ? [] : prices.map((p) => p.currency), reason };
 }
 
 /**
- * Buys one more rune page with the given currency ("IP" is blue essence, or
- * "RP"), using the exact price the client's purchase widget offers. Refused
- * when the client offers no purchase, for example when the page limit is reached.
+ * Buys one more rune page with BE ("IP") or RP, at the store's price. Refused when the store
+ * is not selling one to this account right now.
  */
-export async function buyRunePage(client: LcuClient, currency: string) {
-  const purchasable = await client.get(`/lol-purchase-widget/v1/purchasable-item?${RUNE_PAGE_ITEM}`);
-  const option = purchaseOptions(purchasable).find((o) => o.price?.currencyType === currency);
-  if (!option) {
-    const why = ((purchasable?.validationErrors ?? []) as any[]).map((e) => e.id).join(", ");
-    throw new ActionRefused(`the store offers no rune page for ${currency}${why ? ` (${why})` : ""}`);
-  }
-  return client.post("/lol-purchase-widget/v2/purchaseItems", {
-    items: [{ itemKey: option.itemKey, quantity: 1, source: "cdp", purchaseCurrencyInfo: option.price }],
+export async function buyRunePage(client: LcuClient, currency: string, fetchFn: typeof fetch = fetch) {
+  if (currency !== "IP" && currency !== "RP") throw new ActionRefused("pick BE or RP");
+  const offer = await runePageOffer(client, fetchFn);
+  const cost = currency === "IP" ? offer.ip : offer.rp;
+  if (!cost || offer.limitReached) throw new ActionRefused(`the store is not selling a rune page for ${currency} right now`);
+  const res = await fetchFn(`${offer.base}/storefront/v3/purchase?language=${STORE_LANG}`, {
+    method: "POST",
+    headers: offer.headers,
+    body: JSON.stringify({
+      accountId: offer.accountId,
+      items: [
+        {
+          inventoryType: "SPELL_BOOK_PAGE",
+          itemId: 1,
+          ipCost: currency === "IP" ? cost : null,
+          rpCost: currency === "RP" ? cost : null,
+          quantity: 1,
+        },
+      ],
+    }),
   });
+  const body: any = await res.json().catch(() => ({}));
+  if (!res.ok) throw new ActionRefused(`the store refused the purchase (${res.status}${body?.message ? `: ${body.message}` : ""})`);
+  return body;
 }
 
 export interface StyleInfo {
@@ -586,7 +640,7 @@ function stylesById(styles: any[]) {
   return Object.fromEntries(styles.map((s) => [s.id, styleInfo(s)]));
 }
 
-function styleInfo(s: any): StyleInfo {
+export function styleInfo(s: any): StyleInfo {
   const slots = (type: string) => (s.slots as any[]).filter((x) => x.type === type).map((x) => x.perks as number[]);
   return {
     name: s.name,
@@ -724,13 +778,19 @@ export function takenBy(session: any, actions: any[], me: number): Set<number> {
 /** Seconds before the end of your turn at which a hover is locked in (ms). */
 const LOCK_WINDOW_MS = 5000;
 
+/** A pick or ban that is open right now. */
+export const openAction = (a: any) => a.isInProgress && !a.completed && (a.type === "ban" || a.type === "pick");
+
+/** True when a match is waiting for your answer and you have not given one. */
+export const awaitingAnswer = (check: any) => check?.state === "InProgress" && check?.playerResponse === "None";
+
 export async function autoTick(client: LcuClient, cfg: AutoConfig): Promise<AutoTickResult> {
   const phase: string = await client.get("/lol-gameflow/v1/gameflow-phase");
 
   if (phase === "ReadyCheck") {
     if (!cfg.accept) return idle(phase);
     const check = await client.get("/lol-matchmaking/v1/ready-check");
-    if (check?.state !== "InProgress" || check?.playerResponse !== "None") return idle(phase);
+    if (!awaitingAnswer(check)) return idle(phase);
     await client.post("/lol-matchmaking/v1/ready-check/accept", {});
     return { phase, did: "accepted the match" };
   }
@@ -739,9 +799,7 @@ export async function autoTick(client: LcuClient, cfg: AutoConfig): Promise<Auto
   const session = await client.get("/lol-champ-select/v1/session");
   const me = session.localPlayerCellId;
   const actions: any[] = (session.actions ?? []).flat();
-  const mine = actions.find(
-    (a) => a.actorCellId === me && a.isInProgress && !a.completed && (a.type === "ban" || a.type === "pick")
-  );
+  const mine = actions.find((a) => a.actorCellId === me && openAction(a));
   if (!mine) return idle(phase);
 
   const wanted = mine.type === "ban" ? cfg.bans : cfg.picks;

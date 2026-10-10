@@ -1,0 +1,871 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+<meta name="color-scheme" content="dark" />
+<title>Champ select</title>
+<style>
+  *, *::before, *::after { box-sizing: border-box; }
+  [hidden] { display: none !important; }
+  :root {
+    --bg: #0f1419;
+    --panel: #18202a;
+    --line: #2a3542;
+    --text: #e6edf3;
+    --muted: #8b98a5;
+    --gold: #c8aa6e;
+    --teal: #0ac8b9;
+    --red: #e84057;
+  }
+  html, body { margin: 0; background: var(--bg); color: var(--text); }
+  body { font: 14px/1.3 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; }
+  p, h2 { margin: 0; }
+  button { font: inherit; color: inherit; background: none; border: 0; padding: 0; cursor: pointer; }
+  button:disabled { cursor: default; }
+  button:focus-visible, input:focus-visible { outline: 2px solid var(--gold); outline-offset: 2px; }
+
+  .app { display: flex; flex-direction: column; min-height: 100vh; min-height: 100dvh; }
+
+  header {
+    position: sticky; top: 0; z-index: 3;
+    display: flex; align-items: center; justify-content: space-between; gap: 12px;
+    padding: 10px 16px; background: var(--panel); border-bottom: 1px solid var(--line);
+  }
+  #phase { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--gold); font-size: 16px; font-weight: 600; }
+  #clock { flex: none; font-size: 20px; font-weight: 600; font-variant-numeric: tabular-nums; }
+
+  /* Bans: my side on the left, the enemy side on the right */
+  .bans { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 12px; padding: 8px 16px 0; }
+  .side-title { display: block; margin-bottom: 4px; font-size: 11px; letter-spacing: .05em; text-transform: uppercase; color: var(--muted); }
+  .mine .side-title { color: var(--teal); }
+  .theirs .side-title { color: var(--red); }
+  .slots { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 4px; }
+  .slot { position: relative; height: 40px; min-width: 0; overflow: hidden; border: 1px solid var(--line); border-radius: 4px; background: var(--panel); }
+  .slot.empty { border-style: dashed; }
+  .slot > .pic { width: 100%; height: 100%; border-radius: 0; }
+  .slot .alt { font-size: 9px; }
+
+  /* A portrait or spell icon. The text in .alt shows only when the image is missing. */
+  .pic { position: relative; display: block; flex: none; overflow: hidden; border-radius: 4px; background: var(--bg); }
+  .pic img { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; }
+  .pic .alt {
+    display: none; position: absolute; inset: 0; padding: 2px;
+    align-items: center; justify-content: center; text-align: center;
+    font-size: 10px; line-height: 1.1; color: var(--muted); overflow: hidden; overflow-wrap: anywhere;
+  }
+  .pic.noimg .alt { display: flex; }
+
+  .idle { margin: auto; padding: 32px 16px; text-align: center; color: var(--muted); }
+
+  .zones { flex: 1; display: flex; flex-direction: column; gap: 12px; min-height: 0; padding: 12px 16px; }
+  .col { display: flex; flex-direction: column; gap: 8px; min-width: 0; }
+  .col h2 { font-size: 12px; letter-spacing: .05em; text-transform: uppercase; }
+  .team h2 { color: var(--teal); }
+  .enemies h2 { color: var(--red); }
+  .list { display: flex; flex-direction: column; gap: 4px; margin: 0; padding: 0; list-style: none; }
+  .warn { font-size: 12px; color: var(--muted); }
+
+  .row, .erow {
+    display: grid; grid-template-columns: 36px minmax(0, 1fr) auto; align-items: center; gap: 8px;
+    min-height: 48px; padding: 4px 8px 4px 6px; border-left: 3px solid var(--teal); border-radius: 6px; background: var(--panel);
+  }
+  .erow { border-left-color: var(--red); }
+  .row.mine { background: #14302d; }
+  .row > .pic, .erow > .pic { width: 36px; height: 36px; }
+  .who { display: flex; flex-direction: column; min-width: 0; }
+  .nm { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 600; }
+  .sub { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; min-width: 0; font-size: 11px; color: var(--muted); }
+  .tag { padding: 0 6px; border: 1px solid var(--line); border-radius: 4px; line-height: 16px; }
+  .tag.locked { color: var(--gold); border-color: var(--gold); }
+  .tag.hovering { color: var(--teal); border-color: var(--teal); }
+  .swap { min-height: 40px; padding: 0 10px; border: 1px solid var(--teal); border-radius: 6px; font-size: 12px; color: var(--teal); }
+  .spells { display: flex; gap: 3px; }
+  .sp { width: 22px; height: 22px; }
+  .sp .alt { font-size: 8px; }
+  .sp.dim { opacity: .5; }
+
+  .picker { display: flex; flex-direction: column; gap: 8px; min-width: 0; }
+  .search { width: 100%; min-height: 40px; padding: 0 12px; border: 1px solid var(--line); border-radius: 6px; background: var(--panel); color: var(--text); font: 16px system-ui, sans-serif; appearance: none; }
+  .search::placeholder { color: var(--muted); }
+  .chips { display: flex; flex: none; gap: 6px; overflow-x: auto; scrollbar-width: none; }
+  .chip { flex: none; min-height: 40px; padding: 0 12px; border: 1px solid var(--line); border-radius: 20px; background: var(--panel); color: var(--muted); }
+  .chip.on { border-color: var(--gold); color: var(--gold); }
+  .hint { font-size: 12px; color: var(--muted); }
+  .hint.turn { color: var(--gold); }
+  .tiles {
+    display: grid; grid-template-columns: repeat(auto-fill, minmax(78px, 1fr)); align-content: start; gap: 6px;
+    max-height: 50vh; max-height: 50dvh; overflow-y: auto;
+  }
+  .tiles > .warn { grid-column: 1 / -1; }
+  .tile { display: flex; flex-direction: column; align-items: center; gap: 3px; min-width: 0; padding: 4px; border: 1px solid transparent; border-radius: 6px; }
+  .tile.on { border-color: var(--gold); background: var(--panel); }
+  .tile > .pic { width: 52px; height: 52px; }
+  .tname { max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 11px; }
+
+  .dock {
+    position: sticky; bottom: 0; z-index: 3;
+    display: flex; flex-direction: column; gap: 6px;
+    padding: 8px 16px calc(8px + env(safe-area-inset-bottom)); background: var(--panel); border-top: 1px solid var(--line);
+  }
+  .swaps { display: flex; flex-direction: column; gap: 6px; }
+  .swap-row { display: flex; align-items: center; justify-content: space-between; gap: 8px; min-height: 40px; padding: 0 10px; border: 1px solid var(--gold); border-radius: 6px; }
+  .swap-text { min-width: 0; font-size: 13px; }
+  .accept { min-height: 40px; padding: 0 14px; border-radius: 6px; background: var(--gold); color: var(--bg); font-weight: 600; }
+  .msg { font-size: 13px; color: var(--gold); }
+  .msg:empty { display: none; }
+  .msg.bad { color: var(--red); }
+  .bar { display: grid; grid-template-columns: auto minmax(0, 1fr) auto; align-items: center; gap: 8px; }
+  .spell-btns { display: flex; gap: 6px; }
+  .sbtn { width: 44px; height: 44px; border: 1px solid var(--line); border-radius: 6px; background: var(--bg); }
+  .sbtn > .pic { width: 100%; height: 100%; }
+  .sbtn:disabled { opacity: .5; }
+  .lock { min-height: 44px; border-radius: 6px; background: var(--gold); color: var(--bg); font-size: 16px; font-weight: 700; }
+  .lock:disabled { background: var(--line); color: var(--muted); }
+  .runes { display: block; max-width: 112px; min-height: 44px; padding: 0 10px; overflow: hidden; border: 1px solid var(--line); border-radius: 6px; background: var(--bg); white-space: nowrap; text-overflow: ellipsis; }
+
+  .sheet { position: fixed; inset: 0; z-index: 10; display: flex; align-items: flex-end; justify-content: center; background: rgba(0, 0, 0, .6); }
+  .panel {
+    display: flex; flex-direction: column; gap: 8px; width: 100%; max-width: 560px; max-height: 80vh; max-height: 80dvh;
+    padding: 12px 16px calc(12px + env(safe-area-inset-bottom)); background: var(--panel);
+    border: 1px solid var(--line); border-bottom: 0; border-radius: 12px 12px 0 0;
+  }
+  .panel-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+  .panel-head h2 { font-size: 15px; color: var(--gold); }
+  .close { min-height: 40px; padding: 0 14px; border: 1px solid var(--line); border-radius: 6px; }
+  .opts { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 6px; min-height: 0; overflow-y: auto; }
+  .opt { display: flex; align-items: center; gap: 10px; min-width: 0; min-height: 48px; padding: 6px 10px; border: 1px solid var(--line); border-radius: 6px; background: var(--bg); text-align: left; }
+  .opt.on { border-color: var(--gold); color: var(--gold); }
+  .opt:disabled { opacity: .45; }
+  .opt > .pic { width: 36px; height: 36px; }
+  .opt-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .opt-note { font-size: 11px; color: var(--muted); }
+  .btn { min-height: 40px; padding: 0 12px; border: 1px solid var(--line); border-radius: 6px; color: var(--text); }
+  .btn:disabled, .accept:disabled { opacity: .45; }
+  .tag.on { color: var(--gold); border-color: var(--gold); }
+  .idle .btn { margin-top: 12px; }
+  .idle > .accept { margin-top: 12px; }
+  .ready { display: flex; justify-content: center; gap: 8px; margin-top: 12px; }
+  .ready .btn { margin-top: 0; }
+  .idle-time { margin-top: 8px; font-size: 13px; color: var(--gold); }
+  .modes { display: flex; flex-wrap: wrap; justify-content: center; gap: 6px; margin-top: 12px; }
+
+  /* Rune pages: the list, then the editor, which scrolls inside the sheet */
+  .rune-view { display: flex; flex: 1 1 auto; flex-direction: column; gap: 8px; min-height: 0; }
+  .rune-pages { display: flex; flex-direction: column; gap: 6px; min-height: 0; overflow-y: auto; }
+  .rune-row { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 8px; padding: 6px 8px; border: 1px solid var(--line); border-radius: 6px; background: var(--bg); }
+  .rune-row .opt-name { flex: 1 1 140px; }
+  .rune-acts { display: flex; align-items: center; gap: 6px; margin-left: auto; }
+  .rune-scroll { display: flex; flex: 1 1 auto; flex-direction: column; gap: 12px; min-height: 0; overflow-y: auto; }
+  .rune-body { display: flex; flex-direction: column; gap: 12px; }
+  .rune-foot { display: flex; flex: none; flex-direction: column; gap: 6px; }
+  .rune-foot .accept { width: 100%; min-height: 44px; }
+  .rune-sec { display: flex; flex-direction: column; gap: 6px; min-width: 0; }
+  .rune-label { font-size: 11px; letter-spacing: .05em; text-transform: uppercase; color: var(--muted); }
+  .rune-trees { display: flex; flex-wrap: wrap; gap: 6px; }
+  .rtree { display: flex; align-items: center; gap: 6px; min-height: 40px; padding: 0 10px; border: 1px solid var(--line); border-radius: 6px; background: var(--bg); }
+  .rtree.on { border-color: var(--gold); color: var(--gold); }
+  .rtree > .pic { width: 24px; height: 24px; }
+  .rune-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 6px; }
+  .rune-grid.wide { grid-template-columns: repeat(auto-fill, minmax(72px, 1fr)); }
+  .ro { display: flex; flex-direction: column; align-items: center; gap: 4px; min-width: 0; min-height: 64px; padding: 6px 4px; border: 1px solid var(--line); border-radius: 6px; background: var(--bg); }
+  .ro.on { border-color: var(--gold); color: var(--gold); }
+  .ro > .pic { width: 36px; height: 36px; }
+  .ro-name { max-width: 100%; font-size: 11px; line-height: 1.2; text-align: center; overflow: hidden; overflow-wrap: anywhere; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; }
+
+  /* Landscape, or a wide window: three columns that each scroll on their own, with a compact top and bottom */
+  @media (min-width: 640px), (orientation: landscape) {
+    .app { height: 100vh; height: 100dvh; min-height: 0; }
+    header { padding: 6px 16px; }
+    #phase { font-size: 15px; }
+    #clock { font-size: 18px; }
+    .bans { padding-top: 6px; }
+    .mine, .theirs { display: flex; align-items: center; gap: 8px; min-width: 0; }
+    .side-title { flex: none; margin: 0; white-space: nowrap; }
+    .slots { flex: none; grid-template-columns: repeat(5, 34px); }
+    .slot { width: 34px; height: 34px; }
+    .zones { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1.5fr) minmax(0, 1fr); grid-template-rows: minmax(0, 1fr); gap: 12px; padding: 8px 16px; }
+    .col, .picker { min-height: 0; }
+    .team, .enemies { overflow-y: auto; }
+    .row, .erow { min-height: 44px; padding: 3px 8px 3px 6px; }
+    .tiles { flex: 1; min-height: 0; max-height: none; grid-template-columns: repeat(auto-fill, minmax(68px, 1fr)); gap: 4px; }
+    .tile > .pic { width: 44px; height: 44px; }
+    .dock { padding: 6px 16px calc(6px + env(safe-area-inset-bottom)); }
+  }
+</style>
+</head>
+<body>
+<div class="app">
+  <header>
+    <span id="phase">Connecting...</span>
+    <span id="clock" hidden>--:--</span>
+  </header>
+
+  <section class="bans" id="bans" hidden>
+    <div class="mine"><span class="side-title">Your bans</span><div class="slots" id="bans-mine"></div></div>
+    <div class="theirs"><span class="side-title">Enemy bans</span><div class="slots" id="bans-theirs"></div></div>
+  </section>
+
+  <div class="idle" id="idle" hidden>
+    <p id="idle-text"></p>
+    <p class="idle-time" id="idle-time" hidden></p>
+    <div class="ready" id="ready" hidden>
+      <button class="accept" id="accept" type="button">Accept</button>
+      <button class="btn" id="decline" type="button">Decline</button>
+    </div>
+    <button class="accept" id="queue" type="button" hidden>Queue up</button>
+    <button class="btn" id="cancel" type="button" hidden>Cancel search</button>
+    <div class="modes" id="modes" hidden></div>
+    <button class="btn" id="leave" type="button" hidden>Leave lobby</button>
+    <p class="msg" id="idle-msg" role="status"></p>
+    <button class="btn" id="idle-runes" type="button">Rune pages</button>
+  </div>
+
+  <main class="zones" id="zones" hidden>
+    <section class="col team">
+      <h2>Your team</h2>
+      <ul class="list" id="team"></ul>
+      <p class="warn">Swap: not tested in a live game.</p>
+    </section>
+    <section class="col picker">
+      <input class="search" id="search" type="search" placeholder="Search champions" aria-label="Search champions" autocomplete="off" />
+      <div class="chips" id="chips"></div>
+      <p class="hint" id="hint"></p>
+      <div class="tiles" id="tiles"></div>
+    </section>
+    <section class="col enemies">
+      <h2>Enemy team</h2>
+      <ul class="list" id="enemies"></ul>
+    </section>
+  </main>
+
+  <div class="dock" id="dock" hidden>
+    <div class="swaps" id="swaps" hidden>
+      <div id="swap-items"></div>
+    </div>
+    <p class="msg" id="msg" role="status"></p>
+    <div class="bar">
+      <div class="spell-btns">
+        <button class="sbtn" id="spell1" type="button" disabled></button>
+        <button class="sbtn" id="spell2" type="button" disabled></button>
+      </div>
+      <button class="lock" id="lock" type="button" disabled>Lock In</button>
+      <button class="runes" id="runes" type="button" hidden>Runes</button>
+    </div>
+  </div>
+</div>
+
+<div class="sheet" id="spell-sheet" hidden>
+  <div class="panel">
+    <div class="panel-head"><h2 id="spell-title">Spell</h2><button class="close" id="spell-close" type="button">Close</button></div>
+    <div class="opts" id="spell-list"></div>
+    <p class="msg" id="spell-msg"></p>
+  </div>
+</div>
+
+<div class="sheet" id="rune-sheet" hidden>
+  <div class="panel">
+    <div class="panel-head"><h2 id="rune-title">Rune pages</h2><button class="close" id="rune-close" type="button">Close</button></div>
+    <div class="rune-view" id="rune-list-view">
+      <p class="warn" id="rune-now"></p>
+      <p class="warn">Not tested in a live game.</p>
+      <div class="rune-pages" id="rune-list"></div>
+      <p class="msg" id="rune-msg"></p>
+    </div>
+    <div class="rune-view" id="rune-edit-view" hidden>
+      <div class="rune-scroll">
+        <label class="rune-sec"><span class="rune-label">Name</span><input class="search" id="rune-name" type="text" maxlength="40" autocomplete="off" /></label>
+        <p class="hint">Pick a primary tree, a keystone, one rune per row, a secondary tree, two runes from different rows, and one shard per row.</p>
+        <div class="rune-body" id="rune-body"></div>
+      </div>
+      <div class="rune-foot">
+        <p class="msg" id="rune-edit-msg" role="status"></p>
+        <p class="warn">Not tested in a live game.</p>
+        <button class="accept" id="rune-save" type="button">Save</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script>
+(() => {
+  "use strict";
+  const LOST = "Connection lost. Retrying...";
+  const SAFE = /^[A-Za-z0-9_-][A-Za-z0-9._-]{0,63}$/;
+  const PHASE = { ban: "Ban", pick: "Pick" };
+  // Outside champ select: the header, by client phase.
+  const LOBBY = { None: "Not in a lobby", Lobby: "In a lobby", Matchmaking: "In queue", ReadyCheck: "Match found" };
+  const IDLE_TEXT = {
+    None: "Open a lobby in the client to queue up here.",
+    Lobby: "Ready to queue.",
+    Matchmaking: "Searching for a match.",
+  };
+  const $ = (id) => document.getElementById(id);
+  let state = null;      // last /api/state reply, with clockAt added
+  let role = "All";      // selected role chip
+  let sheetSlot = "spell1";
+  let runeData = null;   // last GET /api/runes reply: pages, trees, shards, names
+  let draft = null;      // the rune page open in the editor, as picked so far
+
+  const el = (tag, text, cls) => {
+    const node = document.createElement(tag);
+    if (text !== undefined) node.textContent = text;
+    if (cls) node.className = cls;
+    return node;
+  };
+  const say = (box, text, bad) => {
+    box.textContent = text;
+    box.classList.toggle("bad", !!bad);
+  };
+  // Rebuilds a list only when its data changed, so a tap is not lost to a re-render between poll ticks.
+  const paint = (node, key, build) => {
+    const k = JSON.stringify(key);
+    if (node.dataset.key === k) return;
+    node.dataset.key = k;
+    node.replaceChildren(...build());
+  };
+  const iconSrc = (dir, file) => (typeof file === "string" && SAFE.test(file) ? `/icon/${dir}/${file}` : "");
+  const champSrc = (c) => iconSrc("champion", `${c.alias || ""}.png`);
+  // Rune and tree icons come from names.<id>.icon in the /api/runes reply.
+  const runeName = (id) => (runeData && runeData.names && runeData.names[id]) || {};
+  const runeLabel = (id) => (typeof runeName(id).name === "string" ? runeName(id).name : String(id));
+  const runeSrc = (id) => {
+    const icon = runeName(id).icon;
+    return typeof icon === "string" && icon.startsWith("/icon/rune/") ? icon : "";
+  };
+  const clockText = (ms) => {
+    const s = Math.ceil(ms / 1000);
+    return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, "0")}`;
+  };
+  // A portrait or icon. Its text (alt) is shown only when the image is missing or not valid.
+  function pic(src, cls, alt) {
+    const box = el("span", undefined, "pic" + (cls ? " " + cls : ""));
+    if (alt !== undefined) box.append(el("span", alt, "alt"));
+    if (src) {
+      const img = document.createElement("img");
+      img.alt = "";
+      img.loading = "lazy";
+      img.onerror = () => { img.remove(); box.classList.add("noimg"); };
+      img.src = src;
+      box.prepend(img);
+    } else {
+      box.classList.add("noimg");
+    }
+    return box;
+  }
+
+  async function api(path, body) {
+    let res;
+    try {
+      res = await fetch(path, {
+        method: body ? "POST" : "GET",
+        headers: { "content-type": "application/json" },
+        body: body ? JSON.stringify(body) : undefined,
+      });
+    } catch {
+      throw new Error(LOST);
+    }
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(data.error || "Request failed (" + res.status + ")");
+    return data;
+  }
+
+  // Sends one action, shows the result in the given line, then reloads the state.
+  async function act(path, body, box, done) {
+    say(box, "");
+    try {
+      await api(path, body);
+      say(box, done);
+      await refresh();
+    } catch (err) {
+      say(box, err.message, true);
+    }
+  }
+
+  async function refresh() {
+    let next;
+    try {
+      next = await api("/api/state");
+    } catch (err) {
+      if (!state) $("phase").textContent = "Not connected";
+      say($("msg"), err.message, true);
+      return;
+    }
+    next.clockAt = Date.now();
+    state = next;
+    if ($("msg").textContent === LOST) say($("msg"), "");
+    render();
+  }
+  async function poll() {
+    await refresh();
+    setTimeout(poll, 2000);
+  }
+
+  function tickClock() {
+    const t = state && state.inChampSelect ? state.timer : null;
+    $("clock").textContent = t && typeof t.leftMs === "number"
+      ? clockText(Math.max(0, t.leftMs - (Date.now() - state.clockAt)))
+      : "--:--";
+  }
+
+  // The queue time, and the time left to answer a match, counted from the last state.
+  function tickIdle() {
+    const s = state;
+    if (!s || s.inChampSelect) return;
+    const elapsed = (Date.now() - s.clockAt) / 1000;
+    const parts = [];
+    if (s.phase === "Matchmaking" && s.search) {
+      parts.push("In queue " + clockText((s.search.timeInQueue + elapsed) * 1000));
+      if (s.search.estimatedQueueTime != null) parts.push("estimated " + clockText(s.search.estimatedQueueTime * 1000));
+    }
+    if (s.phase === "ReadyCheck" && s.readyCheck && s.readyCheck.secondsLeft != null) {
+      parts.push("time to answer " + clockText(Math.max(0, s.readyCheck.secondsLeft - elapsed) * 1000));
+    }
+    $("idle-time").textContent = parts.join(" · ");
+    $("idle-time").hidden = !parts.length;
+  }
+
+  // The lobby's mode as chips to switch to, and the leave button.
+  function renderModes(s) {
+    const lobby = s.lobby;
+    $("modes").hidden = s.phase !== "Lobby" || !lobby;
+    $("leave").hidden = s.phase !== "Lobby" || !lobby;
+    if (!lobby) return;
+    paint($("modes"), [lobby.queueId, lobby.modes], () => lobby.modes.map((m) => {
+      const b = el("button", m.name, "chip" + (m.id === lobby.queueId ? " on" : ""));
+      b.type = "button";
+      b.onclick = () => act("/api/mode", { queueId: m.id }, $("idle-msg"), "Mode changed.");
+      return b;
+    }));
+  }
+
+  // Outside champ select: the lobby, the queue and a found match.
+  function renderIdle(s) {
+    const rc = s.readyCheck;
+    const answered = !!rc && rc.response !== "None";
+    $("idle-text").textContent = s.phase === "ReadyCheck"
+      ? (answered ? "Waiting for the others to answer." : "Accept or decline the match.")
+      : IDLE_TEXT[s.phase] || "Not in champion select yet. This page fills in when champion select starts.";
+    $("ready").hidden = s.phase !== "ReadyCheck";
+    $("accept").disabled = answered;
+    $("decline").disabled = answered;
+    $("queue").hidden = s.phase !== "Lobby";
+    $("cancel").hidden = s.phase !== "Matchmaking";
+    renderModes(s);
+    tickIdle();
+  }
+
+  function render() {
+    const s = state;
+    const live = s.inChampSelect;
+    $("phase").textContent = live ? PHASE[s.timer.phase] || "Waiting" : LOBBY[s.phase] || "Not in champion select";
+    $("clock").hidden = !live;
+    $("idle").hidden = live;
+    for (const id of ["bans", "zones", "dock"]) $(id).hidden = !live;
+    tickClock();
+    if (!$("rune-sheet").hidden) renderRuneNow(s);
+    if (!live) {
+      renderIdle(s);
+      return;
+    }
+    paint($("bans-mine"), s.bans.mine, () => slots(s.bans.mine));
+    paint($("bans-theirs"), s.bans.theirs, () => slots(s.bans.theirs));
+    paint($("team"), [s.team, s.spellList], () => s.team.map((p) => teamRow(p, s.spellList)));
+    paint($("enemies"), s.enemies, () => s.enemies.map(enemyRow));
+    renderPicker(s);
+    renderSwaps(s);
+    renderBar(s);
+    if (!$("spell-sheet").hidden) renderSpellSheet(s);
+  }
+
+  function slots(list) {
+    return Array.from({ length: 5 }, (_, i) => {
+      const c = list[i];
+      if (!c) return el("span", undefined, "slot empty");
+      const b = el("button", undefined, "slot");
+      b.type = "button";
+      b.setAttribute("aria-label", c.name);
+      b.append(pic(champSrc(c), "", c.name));
+      b.onclick = () => say($("msg"), c.name);
+      return b;
+    });
+  }
+
+  function spellPair(spells, list) {
+    const box = el("span", undefined, "spells");
+    for (const id of spells ? [spells.spell1, spells.spell2] : [0, 0]) {
+      const sp = spells ? list.find((x) => x.id === id) : undefined;
+      box.append(pic(sp ? iconSrc("spell", sp.file) : "", "sp" + (sp ? "" : " dim"), sp ? sp.name.slice(0, 2) : "?"));
+    }
+    return box;
+  }
+  function hiddenPair() {
+    const box = el("span", undefined, "spells");
+    box.append(pic("", "sp dim", "?"), pic("", "sp dim", "?"));
+    return box;
+  }
+
+  function teamRow(p, spellList) {
+    const li = el("li", undefined, "row" + (p.mine ? " mine" : ""));
+    const who = el("span", undefined, "who");
+    who.append(el("span", p.name || "picking...", "nm"));
+    const sub = el("span", undefined, "sub");
+    if (p.position) sub.append(el("span", p.position));
+    if (p.locked) sub.append(el("span", "Locked", "tag locked"));
+    else if (p.hovering) sub.append(el("span", "Hovering", "tag hovering"));
+    if (p.mine) sub.append(el("span", "You", "tag"));
+    if (p.swappable && !p.mine) {
+      const b = el("button", "Swap", "swap");
+      b.type = "button";
+      b.onclick = () => act("/api/swap", { action: "request", id: p.cellId }, $("msg"), "Swap requested.");
+      sub.append(b);
+    }
+    who.append(sub);
+    li.append(pic(champSrc(p), ""), who, spellPair(p.spells, spellList));
+    return li;
+  }
+
+  function enemyRow(e) {
+    const li = el("li", undefined, "erow");
+    const who = el("span", undefined, "who");
+    who.append(el("span", e.name || "picking...", "nm"));
+    li.append(pic(champSrc(e), ""), who, hiddenPair());
+    return li;
+  }
+
+  function renderPicker(s) {
+    const turn = s.turn;
+    const hover = turn ? turn.championId : 0;
+    const roles = ["All", ...new Set(s.options.flatMap((o) => o.roles || []))];
+    if (!roles.includes(role)) role = "All";
+    paint($("chips"), [roles, role], () => roles.map((r) => {
+      const b = el("button", r, "chip" + (r === role ? " on" : ""));
+      b.type = "button";
+      b.onclick = () => { role = r; renderPicker(state); };
+      return b;
+    }));
+
+    const hint = $("hint");
+    hint.textContent = turn ? "Your turn: tap a champion to hover it, then Lock In" : "Waiting for your turn";
+    hint.classList.toggle("turn", !!turn);
+
+    const q = $("search").value.trim().toLowerCase();
+    const shown = s.options.filter((o) => (role === "All" || (o.roles || []).includes(role)) && o.name.toLowerCase().includes(q));
+    paint($("tiles"), [shown, hover, s.options.length], () => {
+      if (!shown.length) return s.options.length ? [el("p", "No champion matches.", "warn")] : [];
+      return shown.map((o) => {
+        const b = el("button", undefined, "tile" + (o.id === hover ? " on" : ""));
+        b.type = "button";
+        b.append(pic(champSrc(o), ""), el("span", o.name, "tname"));
+        b.onclick = () => act("/api/choose", { championId: o.id, lock: false }, $("msg"), "Hovering " + o.name + ". Lock In when ready.");
+        return b;
+      });
+    });
+  }
+
+  function renderSwaps(s) {
+    const items = s.swaps.filter((x) => x && x.id != null);
+    $("swaps").hidden = !items.length;
+    paint($("swap-items"), items, () => items.map((x) => {
+      const row = el("div", undefined, "swap-row");
+      const b = el("button", "Accept", "accept");
+      b.type = "button";
+      b.onclick = () => act("/api/swap", { action: "accept", id: x.id }, $("msg"), "Swap accepted.");
+      row.append(el("span", "Champion swap request (not tested in a live game)", "swap-text"), b);
+      return row;
+    }));
+  }
+
+  function renderBar(s) {
+    const turn = s.turn;
+    $("lock").disabled = !(turn && turn.championId > 0);
+    for (const slot of ["spell1", "spell2"]) {
+      const id = s.spells ? s.spells[slot] : 0;
+      const sp = s.spells ? s.spellList.find((x) => x.id === id) : undefined;
+      const btn = $(slot);
+      btn.disabled = !s.spells;
+      btn.setAttribute("aria-label", sp ? "Spell: " + sp.name : "Spell not set");
+      paint(btn, [id, sp ? sp.file : "", !!s.spells], () => [pic(sp ? iconSrc("spell", sp.file) : "", "", sp ? sp.name : "?")]);
+    }
+    $("runes").hidden = !s.runes;
+    if (s.runes) $("runes").textContent = (s.runes.current && s.runes.current.name) || "Runes";
+  }
+
+  function renderSpellSheet(s) {
+    if (!s.spells) return;
+    const cur = s.spells[sheetSlot];
+    $("spell-title").textContent = sheetSlot === "spell1" ? "Spell 1" : "Spell 2";
+    paint($("spell-list"), [s.spellList, cur, sheetSlot], () => s.spellList.map((sp) => {
+      const b = el("button", undefined, "opt" + (sp.id === cur ? " on" : ""));
+      b.type = "button";
+      b.disabled = sp.disallowed === true;
+      b.append(pic(iconSrc("spell", sp.file), ""), el("span", sp.name, "opt-name"));
+      if (sp.disallowed) b.append(el("span", "Not allowed", "opt-note"));
+      b.onclick = () => {
+        const pair = { spell1: state.spells.spell1, spell2: state.spells.spell2, [sheetSlot]: sp.id };
+        act("/api/spells", pair, $("spell-msg"), "Spells saved.");
+      };
+      return b;
+    }));
+  }
+
+  function renderRuneNow(s) {
+    const r = s.runes;
+    $("rune-now").textContent = r ? (r.current ? "Current page: " + r.current.name : "No rune page selected.") : "";
+  }
+
+  // The page list comes from GET /api/runes. It is read when the sheet opens and after each change.
+  async function loadRunes() {
+    try {
+      runeData = await api("/api/runes");
+    } catch (err) {
+      say(runeMsg(), err.message, true);
+      return;
+    }
+    renderRuneList();
+  }
+  function runeMsg() {
+    return $("rune-edit-view").hidden ? $("rune-msg") : $("rune-edit-msg");
+  }
+  function renderRuneList() {
+    if (!runeData) return;
+    const pages = runeData.pages;
+    paint($("rune-list"), pages, () => pages.map(runeRow));
+  }
+  function runeRow(p) {
+    const row = el("div", undefined, "rune-row");
+    const acts = el("span", undefined, "rune-acts");
+    if (p.current) acts.append(el("span", "Current", "tag on"));
+    const set = el("button", "Set current", "btn");
+    set.type = "button";
+    set.disabled = !!p.current;
+    set.onclick = () => setCurrent(p);
+    const edit = el("button", p.editable ? "Edit" : "Locked", "btn");
+    edit.type = "button";
+    edit.disabled = !p.editable;
+    edit.onclick = () => openEditor(p);
+    acts.append(set, edit);
+    row.append(el("span", p.name, "opt-name"), acts);
+    return row;
+  }
+  async function setCurrent(p) {
+    await act("/api/rune", { id: p.id }, $("rune-msg"), "Rune page set.");
+    await loadRunes();
+  }
+
+  function showRuneView(editing) {
+    $("rune-list-view").hidden = editing;
+    $("rune-edit-view").hidden = !editing;
+    $("rune-title").textContent = editing ? "Edit rune page" : "Rune pages";
+    $("rune-close").textContent = editing ? "Back" : "Close";
+  }
+  function openEditor(p) {
+    draft = draftFrom(p);
+    $("rune-name").value = p.name;
+    $("rune-name").disabled = !p.editable;
+    $("rune-save").disabled = !p.editable;
+    say($("rune-edit-msg"), "");
+    showRuneView(true);
+    renderDraft();
+  }
+
+  // Maps a page's perks back onto the trees, in the order the server sends them.
+  // A value that is not found in the trees stays empty.
+  function draftFrom(p) {
+    const d = { id: p.id, primary: 0, keystone: 0, rows: [0, 0, 0], sub: 0, sec: [0, 0, 0], shards: [0, 0, 0] };
+    const perks = Array.isArray(p.selectedPerkIds) ? p.selectedPerkIds : [];
+    const primary = treeOf(p.primaryStyleId);
+    if (primary) {
+      d.primary = primary.id;
+      if (primary.keystones.includes(perks[0])) d.keystone = perks[0];
+      primary.rows.forEach((ids, i) => { if (ids.includes(perks[1 + i])) d.rows[i] = perks[1 + i]; });
+    }
+    const sub = treeOf(p.subStyleId);
+    if (sub && sub.id !== d.primary) {
+      d.sub = sub.id;
+      for (const id of [perks[4], perks[5]]) {
+        const row = sub.rows.findIndex((ids) => ids.includes(id));
+        if (row >= 0 && !d.sec[row] && d.sec.filter(Boolean).length < 2) d.sec[row] = id;
+      }
+    }
+    runeData.shards.forEach((ids, i) => { if (ids.includes(perks[6 + i])) d.shards[i] = perks[6 + i]; });
+    return d;
+  }
+  const treeOf = (id) => runeData.trees.find((t) => t.id === id);
+
+  // Every change goes through here: it clears the message line and redraws the editor.
+  function edited(change) {
+    say($("rune-edit-msg"), "");
+    change();
+    renderDraft();
+  }
+  function pickPrimary(t) {
+    if (draft.primary === t.id) return;
+    edited(() => {
+      draft.primary = t.id;
+      draft.keystone = 0;
+      draft.rows = [0, 0, 0];
+      if (draft.sub === t.id) { draft.sub = 0; draft.sec = [0, 0, 0]; }
+    });
+  }
+  function pickSecondary(t) {
+    if (draft.sub === t.id) return;
+    edited(() => { draft.sub = t.id; draft.sec = [0, 0, 0]; });
+  }
+  // Two secondary runes at most, one per row. Tapping a selected rune removes it.
+  function pickSecondaryRune(row, id) {
+    const cur = draft.sec[row];
+    const msg = $("rune-edit-msg");
+    if (cur === id) {
+      edited(() => { draft.sec[row] = 0; });
+    } else if (cur) {
+      say(msg, "Only one rune per secondary row. Tap the selected one to remove it.", true);
+    } else if (draft.sec.filter(Boolean).length >= 2) {
+      say(msg, "Only 2 secondary runes. Tap a selected one to remove it.", true);
+    } else {
+      edited(() => { draft.sec[row] = id; });
+    }
+  }
+
+  function section(label, ...bodies) {
+    const box = el("div", undefined, "rune-sec");
+    box.append(el("span", label, "rune-label"), ...bodies);
+    return box;
+  }
+  function treeButtons(list, selected, onPick) {
+    const box = el("div", undefined, "rune-trees");
+    box.append(...list.map((t) => {
+      const b = el("button", undefined, "rtree" + (t.id === selected ? " on" : ""));
+      b.type = "button";
+      b.setAttribute("aria-pressed", String(t.id === selected));
+      b.append(pic(runeSrc(t.id), ""), el("span", t.name));
+      b.onclick = () => onPick(t);
+      return b;
+    }));
+    return box;
+  }
+  function runeTiles(ids, selected, wide, onPick) {
+    const grid = el("div", undefined, wide ? "rune-grid wide" : "rune-grid");
+    grid.append(...ids.map((id) => {
+      const b = el("button", undefined, "ro" + (id === selected ? " on" : ""));
+      b.type = "button";
+      b.setAttribute("aria-pressed", String(id === selected));
+      b.append(pic(runeSrc(id), ""), el("span", runeLabel(id), "ro-name"));
+      b.onclick = () => onPick(id);
+      return b;
+    }));
+    return grid;
+  }
+  function renderDraft() {
+    const d = draft;
+    const primary = treeOf(d.primary);
+    const sub = treeOf(d.sub);
+    const picked = d.sec.filter(Boolean).length;
+    const sections = [section("Primary tree", treeButtons(runeData.trees, d.primary, pickPrimary))];
+    if (primary) {
+      sections.push(section("Keystone", runeTiles(primary.keystones, d.keystone, true, (id) => edited(() => { d.keystone = id; }))));
+      primary.rows.forEach((ids, i) => {
+        sections.push(section("Primary row " + (i + 1), runeTiles(ids, d.rows[i], false, (id) => edited(() => { d.rows[i] = id; }))));
+      });
+    } else {
+      sections.push(el("p", "Pick a primary tree first.", "hint"));
+    }
+    sections.push(section("Secondary tree", treeButtons(runeData.trees.filter((t) => t.id !== d.primary), d.sub, pickSecondary)));
+    sections.push(el("p", "Secondary runes: " + picked + " of 2, from different rows", "hint"));
+    if (sub) {
+      sub.rows.forEach((ids, i) => {
+        sections.push(section("Secondary row " + (i + 1), runeTiles(ids, d.sec[i], false, (id) => pickSecondaryRune(i, id))));
+      });
+    }
+    d.shards.forEach((_, i) => {
+      const ids = runeData.shards[i] || [];
+      sections.push(section("Stat shard row " + (i + 1), runeTiles(ids, d.shards[i], false, (id) => edited(() => { d.shards[i] = id; }))));
+    });
+    $("rune-body").replaceChildren(...sections);
+  }
+
+  // Checks the choices before the request, so a missing one is named. The server still validates.
+  function draftProblem(name) {
+    const d = draft;
+    if (!name) return "Enter a name for the page.";
+    if (name.length > 40) return "The name can be 40 characters at most.";
+    if (!d.primary) return "Pick a primary tree.";
+    if (!d.keystone) return "Pick a keystone.";
+    const row = d.rows.findIndex((id) => !id);
+    if (row >= 0) return "Pick a rune in primary row " + (row + 1) + ".";
+    if (!d.sub) return "Pick a secondary tree.";
+    if (d.sec.filter(Boolean).length !== 2) return "Pick 2 secondary runes, from different rows.";
+    const shard = d.shards.findIndex((id) => !id);
+    if (shard >= 0) return "Pick a stat shard in row " + (shard + 1) + ".";
+    return "";
+  }
+  async function saveDraft() {
+    const msg = $("rune-edit-msg");
+    const name = $("rune-name").value.trim();
+    const problem = draftProblem(name);
+    if (problem) {
+      say(msg, problem, true);
+      return;
+    }
+    const d = draft;
+    const perks = [d.keystone, ...d.rows, ...d.sec.filter(Boolean), ...d.shards];
+    say(msg, "");
+    try {
+      await api("/api/rune-save", { id: d.id, name, primaryStyleId: d.primary, subStyleId: d.sub, perks });
+      say(msg, "Saved.");
+      await loadRunes();
+    } catch (err) {
+      say(msg, err.message, true);
+    }
+  }
+
+  function openSpells(slot) {
+    sheetSlot = slot;
+    say($("spell-msg"), "");
+    $("spell-sheet").hidden = false;
+    if (state) renderSpellSheet(state);
+  }
+  function openRunes() {
+    showRuneView(false);
+    say($("rune-msg"), "");
+    $("rune-sheet").hidden = false;
+    if (state) renderRuneNow(state);
+    loadRunes();
+  }
+
+  $("search").addEventListener("input", () => state && renderPicker(state));
+  $("lock").onclick = () => act("/api/choose", { lock: true }, $("msg"), "Locked in.");
+  $("accept").onclick = () => act("/api/accept", {}, $("idle-msg"), "Accepted.");
+  $("decline").onclick = () => act("/api/decline", {}, $("idle-msg"), "Declined.");
+  $("queue").onclick = () => act("/api/queue", {}, $("idle-msg"), "Queued up.");
+  $("cancel").onclick = () => act("/api/cancel", {}, $("idle-msg"), "Search cancelled.");
+  // Leaving the lobby takes two taps, so one stray tap does not close it.
+  let leaveArmed = null;
+  $("leave").onclick = () => {
+    if (!leaveArmed) {
+      $("leave").textContent = "Tap again to leave";
+      leaveArmed = setTimeout(() => { leaveArmed = null; $("leave").textContent = "Leave lobby"; }, 4000);
+      return;
+    }
+    clearTimeout(leaveArmed);
+    leaveArmed = null;
+    $("leave").textContent = "Leave lobby";
+    act("/api/leave", {}, $("idle-msg"), "Left the lobby.");
+  };
+  $("spell1").onclick = () => openSpells("spell1");
+  $("spell2").onclick = () => openSpells("spell2");
+  $("runes").onclick = openRunes;
+  $("idle-runes").onclick = openRunes;
+  $("spell-close").onclick = () => { $("spell-sheet").hidden = true; };
+  $("rune-close").onclick = () => { if ($("rune-edit-view").hidden) $("rune-sheet").hidden = true; else showRuneView(false); };
+  $("rune-save").onclick = saveDraft;
+  for (const sheet of [$("spell-sheet"), $("rune-sheet")]) {
+    sheet.onclick = (e) => { if (e.target === sheet) sheet.hidden = true; };
+  }
+
+  setInterval(() => { tickClock(); tickIdle(); }, 250);
+  poll();
+})();
+</script>
+</body>
+</html>

@@ -119,9 +119,9 @@ async function main(): Promise<void> {
     fail(err.code ?? EXIT.REQUEST_FAILED, err.message ?? String(err))
   );
   const lock: LockFile = await parse(lockfilePath).catch((err: any) => fail(EXIT.LOCKFILE_MALFORMED, err.message));
-  // "serve <port> <passcode>" runs the phone page until the app stops it.
+  // "serve <port>" runs the phone page until the app stops it.
   if (positional[0] === "serve") {
-    await servePhone(lock, Number(positional[1]), positional[2] ?? "");
+    await servePhone(lock, Number(positional[1]));
     return;
   }
 

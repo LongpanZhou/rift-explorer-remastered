@@ -87,7 +87,7 @@ interface Runes {
   styles: Record<number, RuneStyle>;
   ownedPages: number;
   canAddPage: boolean;
-  buy: { prices: { currency: string; cost: number }[]; options: string[]; blockedBy: string[] };
+  buy: { prices: { currency: string; cost: number }[]; options: string[]; reason: string | null };
 }
 
 interface Challenges {
@@ -117,7 +117,6 @@ const QUEUE_LABEL: Record<string, string> = {
 };
 const SECTIONS = [
   ["overview", "Overview"],
-  ["phone", "Phone"],
   ["icon", "Icon"],
   ["border", "Border & banner"],
   ["background", "Background"],
@@ -126,6 +125,7 @@ const SECTIONS = [
   ["loot", "Loot"],
   ["runes", "Rune pages"],
   ["auto", "Auto champ select"],
+  ["phone", "Phone"],
 ] as const;
 type Section = (typeof SECTIONS)[number][0];
 
@@ -187,6 +187,10 @@ export default function Player({ active = true }: { active?: boolean }) {
     2000,
     auto.enabled
   );
+  // Phone champ select and auto mode do not run together: opening the Phone tab turns auto off.
+  useEffect(() => {
+    if (section === "phone") setAuto((a) => (a.enabled ? { ...a, enabled: false } : a));
+  }, [section]);
   const [ddVersion, setDdVersion] = useState("");
   const profileRef = useRef<Profile | null>(null);
   profileRef.current = profile;
@@ -402,7 +406,6 @@ export default function Player({ active = true }: { active?: boolean }) {
           }
         />
       )}
-      {section === "phone" && <PhonePanel />}
       {section === "auto" && (
         <AutoPanel
           settings={auto}
@@ -416,6 +419,7 @@ export default function Player({ active = true }: { active?: boolean }) {
           log={autoLog}
         />
       )}
+      {section === "phone" && <PhonePanel />}
       {section === "runes" &&
         (runes ? (
           <RunePages
@@ -979,25 +983,22 @@ function RunePages(props: {
         />
         <div className="card">
           <h3>Buy one more page</h3>
-          <p className="muted">{runes.buy.prices.map((p) => `${n(p.cost)} ${CURRENCY_LABEL[p.currency] ?? p.currency}`).join(" or ")}</p>
-          {runes.buy.options.length ? (
-            <div className="row">
-              {runes.buy.options.map((c) => {
-                const price = runes.buy.prices.find((p) => p.currency === c);
-                const label = `${price ? n(price.cost) : ""} ${CURRENCY_LABEL[c] ?? c}`;
-                return (
-                  <button key={c} disabled={props.busy} onClick={() => confirm(`buy-${c}`, () => props.act(["buy-rune-page", c], "Rune page bought."))}>
-                    {armed === `buy-${c}` ? `Click again to spend ${label}` : `Buy with ${label}`}
-                  </button>
-                );
-              })}
-            </div>
-          ) : (
-            <p className="fine">
-              The store will not sell you another page right now
-              {runes.buy.blockedBy.length ? ` (${runes.buy.blockedBy.join(", ")})` : ""}. Your account may be at the page limit.
-            </p>
-          )}
+          <div className="row">
+            {runes.buy.prices.map((p) => {
+              const offered = runes.buy.options.includes(p.currency);
+              const label = `${n(p.cost)} ${CURRENCY_LABEL[p.currency] ?? p.currency}`;
+              return (
+                <button
+                  key={p.currency}
+                  disabled={props.busy || !offered}
+                  onClick={() => confirm(`buy-${p.currency}`, () => props.act(["buy-rune-page", p.currency], "Rune page bought."))}
+                >
+                  {armed === `buy-${p.currency}` ? `Click again to spend ${label}` : `Buy with ${label}`}
+                </button>
+              );
+            })}
+          </div>
+          {!runes.buy.options.length && <p className="fine">The store is not offering a page right now: {runes.buy.reason}.</p>}
         </div>
       </section>
 

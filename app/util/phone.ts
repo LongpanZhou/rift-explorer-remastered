@@ -1,108 +1,194 @@
 /**
  * The phone champ select page. It runs on the Mac, on the local network only: a phone on
- * the same Wi-Fi can open it, and nothing goes through the internet. Every request must
- * carry the passcode shown on the Mac.
+ * the same Wi-Fi can open it, and nothing goes through the internet.
  */
-import { ActionRefused, lcuClient, takenBy, type LcuClient } from "./player";
+import { ActionRefused, awaitingAnswer, lcuClient, openAction, PAGES, takenBy, type LcuClient } from "./player";
 import type { LockFile } from "./LockFileParser";
-import { PHONE_PAGE } from "./phonePage";
+import PHONE_PAGE from "./phone-page.html" with { type: "text" };
+import { championIcon, spellIcon, summonerSpells, type Fetcher } from "./phoneIcons";
+import { runeData, runeIcon, saveRunePage } from "./phoneRunes";
+
+const GAMEFLOW = "/lol-gameflow/v1/gameflow-phase";
+const READY_CHECK = "/lol-matchmaking/v1/ready-check";
 
 export interface PhoneDeps {
   client: LcuClient;
-  passcode: string;
+  /** Fetches Data Dragon files. Defaults to the network; tests pass a stub. */
+  fetch?: Fetcher;
 }
 
 const JSON_HEADERS = { "content-type": "application/json" };
 const reply = (body: unknown, status = 200) => new Response(JSON.stringify(body), { status, headers: JSON_HEADERS });
 
-// Wrong passcodes in the last minute. Past 20, the server refuses until they age out.
-let failures: number[] = [];
-/** Clears the wrong-passcode count (used by tests). */
-export function resetPasscodeFailures() {
-  failures = [];
-}
-const WINDOW_MS = 60_000;
-const MAX_FAILURES = 20;
+const isSpellOrChamp = (n: unknown): n is number => Number.isInteger(n) && (n as number) > 0;
 
-/** Compares two strings in the same time whatever the difference, so the passcode cannot be guessed from timing. */
-function sameText(a: string, b: string): boolean {
-  if (a.length !== b.length) return false;
-  let diff = 0;
-  for (let i = 0; i < a.length; i++) diff |= a.charCodeAt(i) ^ b.charCodeAt(i);
-  return diff === 0;
+interface ChampionInfo {
+  name: string;
+  alias: string;
+  roles: string[];
 }
 
-const isSpellOrChamp = (n: unknown) => Number.isInteger(n) && (n as number) > 0;
-
-let names: { at: number; map: Map<number, string> } = { at: 0, map: new Map() };
-async function championNames(client: LcuClient): Promise<Map<number, string>> {
-  if (Date.now() - names.at > 10 * 60_000) {
-    const list: { id: number; name: string }[] = await client.get("/lol-game-data/assets/v1/champion-summary.json");
-    names = { at: Date.now(), map: new Map(list.map((c) => [c.id, c.name])) };
+let champions: { at: number; map: Map<number, ChampionInfo> } = { at: 0, map: new Map() };
+async function championInfo(client: LcuClient): Promise<Map<number, ChampionInfo>> {
+  if (Date.now() - champions.at > 10 * 60_000) {
+    const list: { id: number; name: string; alias: string; roles?: string[] }[] = await client.get("/lol-game-data/assets/v1/champion-summary.json");
+    champions = {
+      at: Date.now(),
+      map: new Map<number, ChampionInfo>(list.map((c) => [c.id, { name: c.name, alias: c.alias, roles: c.roles ?? [] }])),
+    };
   }
-  return names.map;
+  return champions.map;
 }
 
-/** Everything the phone shows. Outside champ select it says so and nothing else. */
-export async function phoneState(client: LcuClient) {
-  const phase: string = await client.get("/lol-gameflow/v1/gameflow-phase");
-  if (phase !== "ChampSelect") return { phase, inChampSelect: false };
+/** The client's position names, as the phone shows them. */
+const POSITIONS = new Map([
+  ["top", "TOP"],
+  ["jungle", "JGL"],
+  ["middle", "MID"],
+  ["bottom", "BOT"],
+  ["utility", "SUP"],
+]);
 
-  const [session, nameOf] = await Promise.all([
+const DISALLOWED = "/lol-gameflow/v1/session/per-position-summoner-spells/disallowed";
+const idsIn = (x: unknown): number[] => (Array.isArray(x) ? x.filter((n): n is number => typeof n === "number") : []);
+
+/**
+ * Spell ids your position may not use. The response shape is NOT confirmed: an array of ids,
+ * or an object keyed by position, are both read. Check it in a live champ select.
+ * Any error means no spell is refused here.
+ */
+async function disallowedSpells(client: LcuClient, session: any): Promise<number[]> {
+  try {
+    const list = await client.get(DISALLOWED);
+    if (Array.isArray(list)) return idsIn(list);
+    if (!list || typeof list !== "object") return [];
+    const me = (session.myTeam ?? []).find((p: any) => p.cellId === session.localPlayerCellId);
+    const position = String(me?.assignedPosition ?? "").toLowerCase();
+    const key = Object.keys(list).find((k) => k.toLowerCase() === position);
+    return key ? idsIn(list[key]) : [];
+  } catch {
+    return [];
+  }
+}
+
+/** The current rune page, or null when the client gives no pages. */
+function runeState(pages: any[] | null) {
+  if (!pages) return null;
+  const current = pages.find((p) => p.current);
+  return { current: current ? { id: current.id as number, name: current.name as string } : null };
+}
+
+const seconds = (v: unknown) => (typeof v === "number" && Number.isFinite(v) ? v : null);
+
+/** The queue and a found match, for the phone outside champ select. Null where the client has none. */
+async function queueState(client: LcuClient, phase: string) {
+  // The search is read only while one can exist; the client answers 404 otherwise, which reads as null.
+  const [search, check] = await Promise.all([
+    phase === "Matchmaking" ? client.get("/lol-matchmaking/v1/search").catch(() => null) : null,
+    phase === "ReadyCheck" ? client.get(READY_CHECK).catch(() => null) : null,
+  ]);
+  return {
+    search: search
+      ? { searching: search.searchState === "Searching", timeInQueue: seconds(search.timeInQueue) ?? 0, estimatedQueueTime: seconds(search.estimatedQueueTime) }
+      : null,
+    readyCheck: check ? { response: (check.playerResponse as string) ?? "None", secondsLeft: seconds(check.timer) } : null,
+  };
+}
+
+/** Everything the phone shows. In champ select it is the champion select; elsewhere the queue or a found match. */
+export async function phoneState(client: LcuClient, fetchFn?: Fetcher) {
+  const phase: string = await client.get(GAMEFLOW);
+  if (phase !== "ChampSelect") {
+    const [queue, lobby] = await Promise.all([queueState(client, phase), phase === "Lobby" ? lobbyState(client) : null]);
+    return { phase, inChampSelect: false, ...queue, lobby };
+  }
+
+  const [session, info] = await Promise.all([
     client.get("/lol-champ-select/v1/session"),
-    championNames(client),
+    championInfo(client),
   ]);
   const me = session.localPlayerCellId;
   const actions: any[] = (session.actions ?? []).flat();
-  const turn = actions.find(
-    (a) => a.actorCellId === me && a.isInProgress && !a.completed && (a.type === "ban" || a.type === "pick")
-  );
-  const name = (id: number) => (id ? nameOf.get(id) ?? `#${id}` : "");
+  const turn = actions.find((a) => a.actorCellId === me && openAction(a));
+  const live = actions.find(openAction);
+  const hover: number = turn ? turn.championId || 0 : 0;
+  const named = (id: number) => ({
+    name: id ? (info.get(id)?.name ?? `#${id}`) : "",
+    alias: info.get(id)?.alias ?? "",
+  });
+  const champs = (ids: number[] | undefined) => (ids ?? []).filter(Boolean).map((id) => ({ id, ...named(id) }));
 
-  const options: number[] = turn
-    ? await client.get(turn.type === "ban" ? "/lol-champ-select/v1/bannable-champion-ids" : "/lol-champ-select/v1/pickable-champion-ids")
-    : [];
-  const selection = await client.get("/lol-champ-select/v1/session/my-selection").catch(() => null);
-  const swaps = await client.get("/lol-champ-select/v1/session/champion-swaps").catch(() => []);
+  const [options, selection, swaps, pages, allSpells, banned] = await Promise.all([
+    turn ? client.get(turn.type === "ban" ? "/lol-champ-select/v1/bannable-champion-ids" : "/lol-champ-select/v1/pickable-champion-ids") : [],
+    client.get("/lol-champ-select/v1/session/my-selection").catch(() => null),
+    client.get("/lol-champ-select/v1/session/champion-swaps").catch(() => []),
+    client.get(PAGES).catch(() => null),
+    summonerSpells(fetchFn).catch(() => []),
+    disallowedSpells(client, session),
+  ]);
 
   return {
     phase,
     inChampSelect: true,
-    turn: turn ? { id: turn.id, type: turn.type, championId: turn.championId, name: name(turn.championId) } : null,
-    options: options.map((id) => ({ id, name: name(id) })),
-    team: (session.myTeam ?? []).map((p: any) => ({
-      mine: p.cellId === me,
-      champion: name(p.championId) || name(p.championPickIntent),
-      cellId: p.cellId,
-    })),
-    bans: {
-      mine: (session.bans?.myTeamBans ?? []).map(name),
-      theirs: (session.bans?.theirTeamBans ?? []).map(name),
+    timer: {
+      leftMs: typeof session.timer?.adjustedTimeLeftInPhase === "number" ? session.timer.adjustedTimeLeftInPhase : null,
+      phase: live ? live.type : "",
     },
-    enemies: (session.theirTeam ?? []).map((p: any) => name(p.championId)).filter(Boolean),
+    turn: turn ? { championId: hover } : null,
+    options: options.map((id: number) => ({ id, ...named(id), roles: info.get(id)?.roles ?? [] })),
+    team: (session.myTeam ?? []).map((p: any) => {
+      const championId: number = p.championId || p.championPickIntent || 0;
+      const locked = actions.some((a) => a.actorCellId === p.cellId && a.type === "pick" && a.completed);
+      return {
+        cellId: p.cellId as number,
+        mine: p.cellId === me,
+        championId,
+        ...named(championId),
+        position: POSITIONS.get(p.assignedPosition) ?? "",
+        spells: typeof p.spell1Id === "number" && typeof p.spell2Id === "number" ? { spell1: p.spell1Id, spell2: p.spell2Id } : null,
+        locked,
+        hovering: !locked && championId !== 0,
+        swappable: p.cellId !== me,
+      };
+    }),
+    bans: {
+      mine: champs(session.bans?.myTeamBans),
+      theirs: champs(session.bans?.theirTeamBans),
+    },
+    enemies: (session.theirTeam ?? []).map((p: any) => {
+      const championId: number = p.championId || 0;
+      return { cellId: p.cellId as number, championId, ...named(championId) };
+    }),
     spells: selection ? { spell1: selection.spell1Id, spell2: selection.spell2Id } : null,
+    spellList: allSpells.map((s) => ({ id: s.id, name: s.name, file: s.file, disallowed: banned.includes(s.id) })),
+    runes: runeState(pages),
     swaps,
   };
 }
 
-/** Hovers or locks a champion for your current pick or ban. */
+/**
+ * Hovers or locks a champion for your current pick or ban. A lock with no champion locks
+ * the one you are hovering.
+ */
 export async function phoneChoose(client: LcuClient, championId: unknown, lock: unknown) {
-  if (!isSpellOrChamp(championId)) throw new ActionRefused("pick a champion from the list");
+  const locking = lock === true;
+  const useHover = locking && (championId === undefined || championId === null || championId === 0);
+  if (!useHover && !isSpellOrChamp(championId)) throw new ActionRefused("pick a champion from the list");
   const session = await client.get("/lol-champ-select/v1/session");
   const me = session.localPlayerCellId;
   const actions: any[] = (session.actions ?? []).flat();
-  const turn = actions.find(
-    (a) => a.actorCellId === me && a.isInProgress && !a.completed && (a.type === "ban" || a.type === "pick")
-  );
+  const turn = actions.find((a) => a.actorCellId === me && openAction(a));
   if (!turn) throw new ActionRefused("it is not your turn");
+  const id = useHover ? turn.championId : championId;
+  if (!isSpellOrChamp(id)) throw new ActionRefused("hover a champion first");
   const allowed: number[] = await client.get(
     turn.type === "ban" ? "/lol-champ-select/v1/bannable-champion-ids" : "/lol-champ-select/v1/pickable-champion-ids"
   );
-  if (!allowed.includes(championId as number)) throw new ActionRefused("that champion is not available to you");
-  if (takenBy(session, actions, me).has(championId as number)) throw new ActionRefused("a teammate has that champion");
+  if (!allowed.includes(id)) throw new ActionRefused("that champion is not available to you");
+  if (takenBy(session, actions, me).has(id)) throw new ActionRefused("a teammate has that champion");
   await client.patch(`/lol-champ-select/v1/session/actions/${turn.id}`, {
-    championId,
-    completed: lock === true,
+    championId: id,
+    completed: locking,
   });
   return { ok: true };
 }
@@ -111,41 +197,153 @@ export async function phoneChoose(client: LcuClient, championId: unknown, lock: 
 export async function phoneSpells(client: LcuClient, spell1: unknown, spell2: unknown) {
   if (!isSpellOrChamp(spell1) || !isSpellOrChamp(spell2)) throw new ActionRefused("pick two spells");
   if (spell1 === spell2) throw new ActionRefused("pick two different spells");
+  const session = await client.get("/lol-champ-select/v1/session").catch(() => ({}));
+  const banned = await disallowedSpells(client, session);
+  if (banned.includes(spell1) || banned.includes(spell2)) throw new ActionRefused("that spell is not allowed for your position");
   await client.patch("/lol-champ-select/v1/session/my-selection", { spell1Id: spell1, spell2Id: spell2 });
+  return { ok: true };
+}
+
+/** Switches to one of your editable rune pages. Not yet tested in a live client. */
+export async function phoneRune(client: LcuClient, id: unknown) {
+  if (!isSpellOrChamp(id)) throw new ActionRefused("pick a rune page");
+  const pages: any[] = await client.get(PAGES);
+  const page = pages.find((p) => p.id === id);
+  if (!page?.isEditable) throw new ActionRefused("that rune page does not exist");
+  // Unverified: the client may not switch pages from a PUT with current: true. Check it in a live client.
+  await client.put(`${PAGES}/${id}`, { ...page, current: true });
   return { ok: true };
 }
 
 /** Asks for a champion swap with a teammate, or accepts one. Not yet tested in a live game. */
 export async function phoneSwap(client: LcuClient, action: "request" | "accept", id: unknown) {
+  // The action goes into the request path, so only the two known words are allowed.
+  if (action !== "request" && action !== "accept") throw new ActionRefused("pick a swap");
   if (!isSpellOrChamp(id)) throw new ActionRefused("pick a swap");
   await client.post(`/lol-champ-select/v1/session/champion-swaps/${id}/${action}`, {});
   return { ok: true };
 }
 
-/** Handles one request from the phone. Only the page and the API under /api are served. */
+/** Accepts or declines the match that was found. Only while it waits for you and you have not answered. */
+export async function phoneReadyCheck(client: LcuClient, action: "accept" | "decline") {
+  const phase: string = await client.get(GAMEFLOW);
+  const check = phase === "ReadyCheck" ? await client.get(READY_CHECK) : null;
+  if (!awaitingAnswer(check)) throw new ActionRefused("no match is waiting for you");
+  await client.post(`${READY_CHECK}/${action}`, {});
+  return { ok: true };
+}
+
+/** Refuses unless the client is in the given phase. */
+async function requirePhase(client: LcuClient, phase: string, refusal: string) {
+  if ((await client.get(GAMEFLOW)) !== phase) throw new ActionRefused(refusal);
+}
+
+/** Starts the queue from your lobby, as the client's Find Match button does. Only from a lobby. */
+export async function phoneQueue(client: LcuClient) {
+  await requirePhase(client, "Lobby", "queue up from a lobby in the client");
+  await client.post("/lol-lobby/v2/lobby/matchmaking/search", {});
+  return { ok: true };
+}
+
+/** Cancels the search that is running. Only while the client is searching. */
+export async function phoneCancelQueue(client: LcuClient) {
+  await requirePhase(client, "Matchmaking", "you are not in a queue");
+  await client.delete("/lol-lobby/v2/lobby/matchmaking/search");
+  return { ok: true };
+}
+
+let modeCache: { at: number; list: { id: number; name: string }[] } | null = null;
+/** Forgets the mode list (used by tests). */
+export function resetModeCache() {
+  modeCache = null;
+}
+
+/** The modes the phone can switch to: available Summoner's Rift and ARAM queues, cached for ten minutes. */
+async function modeOptions(client: LcuClient) {
+  if (modeCache && Date.now() - modeCache.at < 10 * 60_000) return modeCache.list;
+  const queues: any[] = await client.get("/lol-game-queues/v1/queues");
+  const list = queues
+    .filter((q) => q.queueAvailability === "Available" && q.category === "PvP" && ["kSummonersRift", "kARAM"].includes(q.gameSelectModeGroup))
+    .map((q) => ({ id: q.id as number, name: (q.description || q.name || `Queue ${q.id}`) as string }));
+  modeCache = { at: Date.now(), list };
+  return list;
+}
+
+/** The lobby's current mode and the modes to switch to. Null when there is no lobby. */
+async function lobbyState(client: LcuClient) {
+  const lobby = await client.get("/lol-lobby/v2/lobby").catch(() => null);
+  const queueId = lobby?.gameConfig?.queueId;
+  if (!isSpellOrChamp(queueId)) return null;
+  return { queueId: queueId as number, modes: await modeOptions(client).catch(() => []) };
+}
+
+/** Switches the lobby to another mode. Only from the lobby, so a search has to be cancelled first. */
+export async function phoneMode(client: LcuClient, queueId: unknown) {
+  if (!isSpellOrChamp(queueId)) throw new ActionRefused("pick a mode");
+  await requirePhase(client, "Lobby", "change the mode from a lobby in the client");
+  if (!(await modeOptions(client)).some((m) => m.id === queueId)) throw new ActionRefused("that mode is not available");
+  await client.post("/lol-lobby/v2/lobby", { queueId });
+  return { ok: true };
+}
+
+/** Leaves the lobby. Only from the lobby, not during a search. */
+export async function phoneLeaveLobby(client: LcuClient) {
+  await requirePhase(client, "Lobby", "you are not in a lobby");
+  await client.delete("/lol-lobby/v2/lobby");
+  return { ok: true };
+}
+
+/** Serves one icon, or 404 when the path does not name a valid icon. */
+async function iconReply(path: string, deps: PhoneDeps): Promise<Response> {
+  const champion = path.match(/^\/icon\/champion\/(.+)\.png$/);
+  const spell = path.match(/^\/icon\/spell\/(.+)$/);
+  const rune = path.match(/^\/icon\/rune\/(\d+)\.png$/);
+  try {
+    let bytes: ArrayBuffer | null = null;
+    if (champion) bytes = await championIcon(champion[1], deps.fetch);
+    else if (spell) bytes = await spellIcon(spell[1], deps.fetch);
+    else if (rune) bytes = await runeIcon(deps.client, Number(rune[1]), deps.fetch);
+    if (!bytes) return reply({ error: "not found" }, 404);
+    return new Response(bytes, { headers: { "content-type": "image/png", "cache-control": "private, max-age=86400" } });
+  } catch {
+    return reply({ error: "icon unavailable" }, 502);
+  }
+}
+
+type Route = (deps: PhoneDeps, body: any) => Promise<unknown>;
+
+/** The API, by "METHOD /path". A request for anything else is 404. */
+const ROUTES: Record<string, Route> = {
+  "GET /api/state": (d) => phoneState(d.client, d.fetch),
+  "POST /api/choose": (d, b) => phoneChoose(d.client, b.championId, b.lock),
+  "POST /api/spells": (d, b) => phoneSpells(d.client, b.spell1, b.spell2),
+  "POST /api/swap": (d, b) => phoneSwap(d.client, b.action, b.id),
+  "POST /api/accept": (d) => phoneReadyCheck(d.client, "accept"),
+  "POST /api/decline": (d) => phoneReadyCheck(d.client, "decline"),
+  "POST /api/queue": (d) => phoneQueue(d.client),
+  "POST /api/cancel": (d) => phoneCancelQueue(d.client),
+  "POST /api/mode": (d, b) => phoneMode(d.client, b.queueId),
+  "POST /api/leave": (d) => phoneLeaveLobby(d.client),
+  "POST /api/rune": (d, b) => phoneRune(d.client, b.id),
+  "GET /api/runes": (d) => runeData(d.client),
+  "POST /api/rune-save": (d, b) => saveRunePage(d.client, b),
+};
+
+/** Handles one request from the phone. Only the page, the API under /api and the icons under /icon are served. */
 export async function handlePhone(req: Request, deps: PhoneDeps): Promise<Response> {
   const url = new URL(req.url);
   if (req.method === "GET" && url.pathname === "/") {
     return new Response(PHONE_PAGE, { headers: { "content-type": "text/html; charset=utf-8" } });
   }
-  if (!url.pathname.startsWith("/api/")) return reply({ error: "not found" }, 404);
-
-  const now = Date.now();
-  failures = failures.filter((t) => now - t < WINDOW_MS);
-  if (failures.length >= MAX_FAILURES) return reply({ error: "too many wrong passcodes; wait a minute" }, 429);
-  const given = req.headers.get("x-passcode") ?? "";
-  if (!sameText(given, deps.passcode)) {
-    failures.push(now);
-    return reply({ error: "wrong passcode" }, 401);
+  if (url.pathname.startsWith("/icon/")) {
+    return req.method === "GET" ? iconReply(url.pathname, deps) : reply({ error: "not found" }, 404);
   }
+  const route = url.pathname.startsWith("/api/") ? ROUTES[`${req.method} ${url.pathname}`] : undefined;
+  if (!route) return reply({ error: "not found" }, 404);
 
   const body = req.method === "POST" ? ((await req.json().catch(() => ({}))) as any) : {};
   try {
-    if (req.method === "GET" && url.pathname === "/api/state") return reply(await phoneState(deps.client));
-    if (req.method === "POST" && url.pathname === "/api/choose") return reply(await phoneChoose(deps.client, body.championId, body.lock));
-    if (req.method === "POST" && url.pathname === "/api/spells") return reply(await phoneSpells(deps.client, body.spell1, body.spell2));
-    if (req.method === "POST" && url.pathname === "/api/swap") return reply(await phoneSwap(deps.client, body.action, body.id));
-    return reply({ error: "not found" }, 404);
+    return reply(await route(deps, body));
   } catch (err: any) {
     if (err instanceof ActionRefused) return reply({ error: err.message }, 422);
     if (err?.code === "ECONNREFUSED") return reply({ error: "League client not running" }, 502);
@@ -154,11 +352,11 @@ export async function handlePhone(req: Request, deps: PhoneDeps): Promise<Respon
 }
 
 /** Runs the phone server on the local network until the process is stopped. */
-export function servePhone(lock: LockFile, port: number, passcode: string): Promise<never> {
+export function servePhone(lock: LockFile, port: number): Promise<never> {
   Bun.serve({
     hostname: "0.0.0.0",
     port,
-    fetch: (req) => handlePhone(req, { client: lcuClient(lock), passcode }),
+    fetch: (req) => handlePhone(req, { client: lcuClient(lock) }),
   });
   console.error(`phone page on port ${port}`);
   return new Promise(() => {});

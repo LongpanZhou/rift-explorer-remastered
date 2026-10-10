@@ -9,7 +9,6 @@ const PORT = 8787;
 export default function PhonePanel() {
   const [link, setLink] = useState("");
   const [qr, setQr] = useState("");
-  const [passcode, setPasscode] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
 
@@ -19,13 +18,11 @@ export default function PhonePanel() {
     setBusy(true);
     setError("");
     try {
-      const code = String(Math.floor(100000 + Math.random() * 900000));
       const ip: string = await invoke("phone_lan_ip");
-      await invoke("phone_start", { port: PORT, passcode: code });
-      const url = `http://${ip}:${PORT}/?k=${code}`;
+      await invoke("phone_start", { port: PORT });
+      const url = `http://${ip}:${PORT}/`;
       setQr(await QRCode.toDataURL(url, { margin: 1, width: 240, color: { dark: "#0f1419", light: "#ffffff" } }));
       setLink(url);
-      setPasscode(code);
     } catch (e) {
       setError(message(e));
     } finally {
@@ -40,7 +37,6 @@ export default function PhonePanel() {
       await invoke("phone_stop");
       setLink("");
       setQr("");
-      setPasscode("");
     } catch (e) {
       setError(message(e));
     } finally {
@@ -56,20 +52,18 @@ export default function PhonePanel() {
   return (
     <div className="phone-panel">
       <p className="muted">
-        Scan the code with your phone to pick, lock and set spells during champ select. Your phone must be on the same
-        Wi-Fi as this Mac, and this app must stay open. Nothing goes through the internet.
+        Scan the code with your phone to see champ select, pick, lock and set spells, accept matches, queue up, switch mode or leave the lobby. Your phone must be on the same
+        Wi-Fi as this Mac, and this app must stay open. Nothing goes through the internet. Auto champ select turns off
+        while this tab is open.
       </p>
-      {!link ? (
-        <button disabled={busy} onClick={start}>
-          Start the phone page
-        </button>
-      ) : (
+      <button disabled={busy} onClick={link ? stop : start}>
+        {link ? "Stop phone champ select" : "Phone champ select"}
+      </button>
+      {link && (
         <div className="phone-live">
           <img className="phone-qr" src={qr} alt="QR code for the phone page" />
           <div>
-            <p>Passcode: <b className="phone-code">{passcode}</b></p>
             <p className="fine phone-link">{link}</p>
-            <button disabled={busy} onClick={stop}>Stop</button>
           </div>
         </div>
       )}

@@ -27,25 +27,7 @@ import { mkdtempSync, readFileSync } from "fs";
 import { tmpdir } from "os";
 import { join } from "path";
 import { encodeText } from "./text";
-
-// A fake client that serves canned GETs and records every write.
-function fakeClient(gets: Record<string, any>) {
-  const writes: { method: string; path: string; body: unknown }[] = [];
-  const client: LcuClient = {
-    get: async (p) => {
-      if (!(p in gets)) throw new Error(`unexpected GET ${p}`);
-      return gets[p];
-    },
-    put: async (path, body) => void writes.push({ method: "PUT", path, body }),
-    post: async (path, body) => void writes.push({ method: "POST", path, body }),
-    patch: async (path, body) => void writes.push({ method: "PATCH", path, body }),
-    getBytes: async (p) => {
-      if (!(p in gets)) throw new Error(`unexpected GET ${p}`);
-      return new TextEncoder().encode(gets[p]);
-    },
-  };
-  return { client, writes };
-}
+import { fakeClient } from "./fakeClient";
 
 const ICONS = "/lol-inventory/v2/inventory/SUMMONER_ICON";
 const SKINS = "/lol-inventory/v2/inventory/CHAMPION_SKIN";
@@ -272,24 +254,50 @@ test("claim all takes every forced reward, skips choices and keeps going on fail
   expect(posts).toHaveLength(3);
 });
 
-test("buying a rune page uses the client's own price, and is refused when none is offered", async () => {
-  const W = "/lol-purchase-widget/v1/purchasable-item?inventoryType=SPELL_BOOK_PAGE&itemId=1";
-  const refused = fakeClient({ [W]: { purchaseOptions: [], validationErrors: [{ id: "validation.item.owned" }] } });
-  await expect(buyRunePage(refused.client, "IP")).rejects.toThrow("validation.item.owned");
-  expect(refused.writes).toHaveLength(0);
+const STORE = {
+  "/lol-store/v1/getStoreUrl": "https://store.test",
+  "/lol-rso-auth/v1/authorization/access-token": { token: "tok" },
+};
+const RUNE_VIEW = {
+  player: { accountId: 42 },
+  catalog: [{ itemId: 1, inventoryType: "SPELL_BOOK_PAGE", ip: 6300, rp: 590, purchaseLimitReached: false }],
+};
 
-  const key = { itemId: 1, inventoryType: "SPELL_BOOK_PAGE" };
-  const price = { currencyType: "IP", price: 6300, purchasable: true };
-  const offered = fakeClient({ [W]: { purchaseOptions: [{ priceDetails: [{ itemKey: key, price }] }] } });
-  await expect(buyRunePage(offered.client, "RP")).rejects.toBeInstanceOf(ActionRefused);
-  await buyRunePage(offered.client, "IP");
-  expect(offered.writes).toEqual([
+/** A stand-in for the store's service: answers the rune view and records every purchase. */
+function storeStub(view: unknown) {
+  const posts: { url: string; body: any; auth: string | undefined }[] = [];
+  const fetchFn = (async (url: string, init: any = {}) => {
+    if (init.method === "POST") {
+      posts.push({ url, body: JSON.parse(init.body), auth: init.headers.Authorization });
+      return Response.json({ ok: true });
+    }
+    return Response.json(view);
+  }) as unknown as typeof fetch;
+  return { fetchFn, posts };
+}
+
+test("buying a rune page posts the store's purchase in the chosen currency", async () => {
+  const ip = storeStub(RUNE_VIEW);
+  await buyRunePage(fakeClient(STORE).client, "IP", ip.fetchFn);
+  expect(ip.posts).toEqual([
     {
-      method: "POST",
-      path: "/lol-purchase-widget/v2/purchaseItems",
-      body: { items: [{ itemKey: key, quantity: 1, source: "cdp", purchaseCurrencyInfo: price }] },
+      url: "https://store.test/storefront/v3/purchase?language=en_US",
+      body: { accountId: 42, items: [{ inventoryType: "SPELL_BOOK_PAGE", itemId: 1, ipCost: 6300, rpCost: null, quantity: 1 }] },
+      auth: "Bearer tok",
     },
   ]);
+  const rp = storeStub(RUNE_VIEW);
+  await buyRunePage(fakeClient(STORE).client, "RP", rp.fetchFn);
+  expect(rp.posts[0].body.items[0]).toMatchObject({ ipCost: null, rpCost: 590 });
+});
+
+test("a rune page is refused when the store is not selling one, or the currency is not offered", async () => {
+  const limit = storeStub({ ...RUNE_VIEW, catalog: [{ ...RUNE_VIEW.catalog[0], purchaseLimitReached: true }] });
+  await expect(buyRunePage(fakeClient(STORE).client, "IP", limit.fetchFn)).rejects.toBeInstanceOf(ActionRefused);
+  expect(limit.posts).toHaveLength(0);
+  const other = storeStub(RUNE_VIEW);
+  await expect(buyRunePage(fakeClient(STORE).client, "XX", other.fetchFn)).rejects.toBeInstanceOf(ActionRefused);
+  expect(other.posts).toHaveLength(0);
 });
 
 const STYLES = [
