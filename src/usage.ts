@@ -3,10 +3,12 @@
  * sends that ID to the counter at most once a day. Nothing else is sent: no name, no
  * account and no game data. Turning the switch off stops the sending.
  *
- * Set USAGE_URL to the counter's address after you deploy usage-counter/. While it is
+ * COUNTER_URL is the deployed counter's address (see usage-counter/README.md). The
+ * VITE_USAGE_URL environment variable overrides it, e.g. for a local test. While both are
  * empty, nothing is sent and the count is not shown.
  */
-export const USAGE_URL = "";
+const COUNTER_URL = "";
+export const USAGE_URL: string = (import.meta.env.VITE_USAGE_URL || COUNTER_URL).replace(/\/+$/, "");
 
 const ID_KEY = "rift-install-id";
 const DAY_KEY = "rift-usage-day";
