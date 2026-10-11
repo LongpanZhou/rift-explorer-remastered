@@ -72,6 +72,12 @@ export async function spellIcon(file: string, fetchFn: Fetcher = liveFetch): Pro
   return iconBytes(`${DATA_DRAGON}/cdn/${v}/img/spell/${file}`, fetchFn);
 }
 
+/** A skin's tile art by champion alias and skin number, for example "Ahri" and 1. The tiles are about a fifth the size of the splash. Null when the alias is not a plain name. */
+export async function skinArt(alias: string, num: number, fetchFn: Fetcher = liveFetch): Promise<ArrayBuffer | null> {
+  if (!/^[A-Za-z0-9]+$/.test(alias) || !Number.isInteger(num) || num < 0 || num > 999) return null;
+  return iconBytes(`${DATA_DRAGON}/cdn/img/champion/tiles/${alias}_${num}.jpg`, fetchFn);
+}
+
 /** The Summoner's Rift spells (the classic queue), cached for a day. ARAM, URF and other modes' spells are left out. */
 export async function summonerSpells(fetchFn: Fetcher = liveFetch): Promise<SummonerSpell[]> {
   if (spellCache && Date.now() - spellCache.at < DAY_MS) return spellCache.list;

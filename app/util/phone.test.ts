@@ -1,6 +1,6 @@
 import { beforeEach, expect, test } from "bun:test";
 import { ActionRefused } from "./player";
-import { handlePhone, phoneCancelQueue, phoneChoose, phoneLeaveLobby, phoneMode, phoneQueue, phoneReadyCheck, phoneSpells, phoneState, resetModeCache, type PhoneDeps } from "./phone";
+import { handlePhone, phoneCancelQueue, phoneChoose, phoneLeaveLobby, phoneMode, phoneQueue, phoneReadyCheck, phoneSkin, phoneSpells, phoneState, resetModeCache, type PhoneDeps } from "./phone";
 import { resetIconCache } from "./phoneIcons";
 import { resetRuneIconCache } from "./phoneRunes";
 import { fakeClient } from "./fakeClient";
@@ -384,6 +384,66 @@ test("leaving the lobby deletes it, and is refused during a search", async () =>
   const queue = fakeClient({ [PHASE]: "Matchmaking" });
   await expect(phoneLeaveLobby(queue.client)).rejects.toBeInstanceOf(ActionRefused);
   expect(queue.writes).toHaveLength(0);
+});
+
+const SKIN_INFO = "/lol-champ-select/v1/skin-selector-info";
+const SKIN_CAROUSEL = "/lol-champ-select/v1/skin-carousel-skins";
+const SKINS = [
+  { id: 103, name: "Base", disabled: false, ownership: { owned: true } },
+  { id: 104, name: "Sakura", disabled: false, ownership: { owned: true } },
+  { id: 105, name: "Locked skin", disabled: false, ownership: { owned: false } },
+  { id: 106, name: "Hidden", disabled: true, ownership: { owned: true } },
+];
+const skinInfo = (extra: object = {}) => ({ showSkinSelector: true, skinSelectionDisabled: false, selectedSkinId: 103, ...extra });
+const withSkins = (info: object = skinInfo()) => ({ ...world([[turnPick]]), [SKIN_INFO]: info, [SKIN_CAROUSEL]: SKINS });
+
+test("the skins you can wear show in the state, with the one you wear and whether you may change it", async () => {
+  const s = setup(withSkins());
+  const state: any = await phoneState(s.deps.client, s.deps.fetch);
+  expect(state.skins).toEqual({
+    available: true,
+    selected: 103,
+    options: [
+      { id: 103, name: "Base", owned: true },
+      { id: 104, name: "Sakura", owned: true },
+      { id: 105, name: "Locked skin", owned: false },
+    ],
+  });
+  const locked = setup(withSkins(skinInfo({ skinSelectionDisabled: true })));
+  expect(((await phoneState(locked.deps.client, locked.deps.fetch)) as any).skins.available).toBe(false);
+});
+
+test("choosing a skin you own sets it; a skin you do not own, one that is hidden, or any skin while locked is refused", async () => {
+  const s = setup(withSkins());
+  await phoneSkin(s.deps.client, 104);
+  expect(s.writes).toEqual([{ method: "PATCH", path: SELECTION, body: { selectedSkinId: 104 } }]);
+
+  await phoneSkin(s.deps.client, 103); // already worn: nothing is sent
+  expect(s.writes).toHaveLength(1);
+
+  const refused = setup(withSkins());
+  await expect(phoneSkin(refused.deps.client, 105)).rejects.toBeInstanceOf(ActionRefused);
+  await expect(phoneSkin(refused.deps.client, 106)).rejects.toBeInstanceOf(ActionRefused);
+  await expect(phoneSkin(refused.deps.client, 999)).rejects.toBeInstanceOf(ActionRefused);
+  expect(refused.writes).toHaveLength(0);
+
+  const locked = setup(withSkins(skinInfo({ skinSelectionDisabled: true })));
+  await expect(phoneSkin(locked.deps.client, 104)).rejects.toBeInstanceOf(ActionRefused);
+  expect(locked.writes).toHaveLength(0);
+
+  const lobby = setup({ [PHASE]: "Lobby", [SKIN_INFO]: skinInfo(), [SKIN_CAROUSEL]: SKINS });
+  await expect(phoneSkin(lobby.deps.client, 104)).rejects.toBeInstanceOf(ActionRefused);
+  expect(lobby.writes).toHaveLength(0);
+});
+
+test("a skin's splash art is the champion's art for that skin number, and an unknown champion is 404", async () => {
+  const s = setup(world([[turnPick]]));
+  // Skin 9001 is champion 9 (Ahri in the fixture), skin number 1.
+  const res = await handlePhone(req("/icon/splash/9001.jpg"), s.deps);
+  expect(res.status).toBe(200);
+  expect(res.headers.get("content-type")).toBe("image/jpeg");
+  expect(s.dragon.urls.some((u) => u.endsWith("/cdn/img/champion/tiles/Ahri_1.jpg"))).toBe(true);
+  expect((await handlePhone(req("/icon/splash/99001.jpg"), s.deps)).status).toBe(404);
 });
 
 test("a swap whose action is not request or accept is refused, and nothing is sent", async () => {

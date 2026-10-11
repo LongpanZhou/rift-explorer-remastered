@@ -149,6 +149,11 @@
   .ready .btn { margin-top: 0; }
   .idle-time { margin-top: 8px; font-size: 13px; color: var(--gold); }
   .modes { display: flex; flex-wrap: wrap; justify-content: center; gap: 6px; margin-top: 12px; }
+  .skins { display: flex; flex-direction: column; gap: 6px; padding: 8px 16px 0; }
+  .skins-title { font-size: 12px; letter-spacing: .05em; text-transform: uppercase; color: var(--gold); }
+  .skin { flex: none; width: 104px; }
+  .skin > .skin-art { width: 100%; height: 58px; }
+  .skin:disabled { opacity: .45; }
 
   /* Rune pages: the list, then the editor, which scrolls inside the sheet */
   .rune-view { display: flex; flex: 1 1 auto; flex-direction: column; gap: 8px; min-height: 0; }
@@ -238,6 +243,12 @@
       <ul class="list" id="enemies"></ul>
     </section>
   </main>
+
+  <section class="skins" id="skins" hidden>
+    <h2 class="skins-title">Skin</h2>
+    <p class="warn" id="skins-note"></p>
+    <div class="chips" id="skin-row"></div>
+  </section>
 
   <div class="dock" id="dock" hidden>
     <div class="swaps" id="swaps" hidden>
@@ -461,7 +472,7 @@
     $("phase").textContent = live ? PHASE[s.timer.phase] || "Waiting" : LOBBY[s.phase] || "Not in champion select";
     $("clock").hidden = !live;
     $("idle").hidden = live;
-    for (const id of ["bans", "zones", "dock"]) $(id).hidden = !live;
+    for (const id of ["bans", "zones", "dock", "skins"]) $(id).hidden = !live;
     tickClock();
     if (!$("rune-sheet").hidden) renderRuneNow(s);
     if (!live) {
@@ -474,6 +485,7 @@
     paint($("enemies"), s.enemies, () => s.enemies.map(enemyRow));
     renderPicker(s);
     renderSwaps(s);
+    renderSkins(s);
     renderBar(s);
     if (!$("spell-sheet").hidden) renderSpellSheet(s);
   }
@@ -561,6 +573,22 @@
         return b;
       });
     });
+  }
+
+  // The skins the client offers for your champion, and the one you wear. Tapping one wears it.
+  function renderSkins(s) {
+    const sk = s.skins;
+    $("skins").hidden = !sk.options.length;
+    $("skins-note").textContent = sk.available ? "" : "The skin is locked now.";
+    paint($("skin-row"), [sk.selected, sk.available, sk.options], () => sk.options.map((o) => {
+      const b = el("button", undefined, "tile skin" + (o.id === sk.selected ? " on" : ""));
+      b.type = "button";
+      b.append(pic(iconSrc("splash", `${o.id}.jpg`), "skin-art"), el("span", o.name, "tname"));
+      if (!o.owned) b.append(el("span", "not owned", "opt-note"));
+      b.disabled = !sk.available || !o.owned;
+      b.onclick = () => act("/api/skin", { skinId: o.id }, $("msg"), "Skin set.");
+      return b;
+    }));
   }
 
   function renderSwaps(s) {

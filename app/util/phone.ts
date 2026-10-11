@@ -5,11 +5,14 @@
 import { ActionRefused, awaitingAnswer, lcuClient, openAction, PAGES, takenBy, type LcuClient } from "./player";
 import type { LockFile } from "./LockFileParser";
 import PHONE_PAGE from "./phone-page.html" with { type: "text" };
-import { championIcon, spellIcon, summonerSpells, type Fetcher } from "./phoneIcons";
+import { championIcon, skinArt, spellIcon, summonerSpells, type Fetcher } from "./phoneIcons";
 import { runeData, runeIcon, saveRunePage } from "./phoneRunes";
 
 const GAMEFLOW = "/lol-gameflow/v1/gameflow-phase";
 const READY_CHECK = "/lol-matchmaking/v1/ready-check";
+const MY_SELECTION = "/lol-champ-select/v1/session/my-selection";
+const SKIN_INFO = "/lol-champ-select/v1/skin-selector-info";
+const SKIN_CAROUSEL = "/lol-champ-select/v1/skin-carousel-skins";
 
 export interface PhoneDeps {
   client: LcuClient;
@@ -78,6 +81,24 @@ function runeState(pages: any[] | null) {
   return { current: current ? { id: current.id as number, name: current.name as string } : null };
 }
 
+/**
+ * The skins for your champion: whether you may change the one you wear now, which one you wear,
+ * and the skins the client offers. The skin list is read only while the selector is open. A skin
+ * with no ownership data counts as owned; the client refuses the rest.
+ */
+async function skinOffers(client: LcuClient) {
+  const info = await client.get(SKIN_INFO).catch(() => null);
+  const open = Boolean(info?.showSkinSelector);
+  const carousel: any[] = open ? await client.get(SKIN_CAROUSEL).catch(() => []) : [];
+  return {
+    available: open && !info?.skinSelectionDisabled,
+    selected: (info?.selectedSkinId ?? 0) as number,
+    options: carousel
+      .filter((s) => !s.disabled)
+      .map((s) => ({ id: s.id as number, name: s.name as string, owned: s.ownership?.owned !== false })),
+  };
+}
+
 const seconds = (v: unknown) => (typeof v === "number" && Number.isFinite(v) ? v : null);
 
 /** The queue and a found match, for the phone outside champ select. Null where the client has none. */
@@ -118,13 +139,14 @@ export async function phoneState(client: LcuClient, fetchFn?: Fetcher) {
   });
   const champs = (ids: number[] | undefined) => (ids ?? []).filter(Boolean).map((id) => ({ id, ...named(id) }));
 
-  const [options, selection, swaps, pages, allSpells, banned] = await Promise.all([
+  const [options, selection, swaps, pages, allSpells, banned, skins] = await Promise.all([
     turn ? client.get(turn.type === "ban" ? "/lol-champ-select/v1/bannable-champion-ids" : "/lol-champ-select/v1/pickable-champion-ids") : [],
-    client.get("/lol-champ-select/v1/session/my-selection").catch(() => null),
+    client.get(MY_SELECTION).catch(() => null),
     client.get("/lol-champ-select/v1/session/champion-swaps").catch(() => []),
     client.get(PAGES).catch(() => null),
     summonerSpells(fetchFn).catch(() => []),
     disallowedSpells(client, session),
+    skinOffers(client),
   ]);
 
   return {
@@ -163,6 +185,7 @@ export async function phoneState(client: LcuClient, fetchFn?: Fetcher) {
     spellList: allSpells.map((s) => ({ id: s.id, name: s.name, file: s.file, disallowed: banned.includes(s.id) })),
     runes: runeState(pages),
     swaps,
+    skins,
   };
 }
 
@@ -200,7 +223,7 @@ export async function phoneSpells(client: LcuClient, spell1: unknown, spell2: un
   const session = await client.get("/lol-champ-select/v1/session").catch(() => ({}));
   const banned = await disallowedSpells(client, session);
   if (banned.includes(spell1) || banned.includes(spell2)) throw new ActionRefused("that spell is not allowed for your position");
-  await client.patch("/lol-champ-select/v1/session/my-selection", { spell1Id: spell1, spell2Id: spell2 });
+  await client.patch(MY_SELECTION, { spell1Id: spell1, spell2Id: spell2 });
   return { ok: true };
 }
 
@@ -221,6 +244,19 @@ export async function phoneSwap(client: LcuClient, action: "request" | "accept",
   if (action !== "request" && action !== "accept") throw new ActionRefused("pick a swap");
   if (!isSpellOrChamp(id)) throw new ActionRefused("pick a swap");
   await client.post(`/lol-champ-select/v1/session/champion-swaps/${id}/${action}`, {});
+  return { ok: true };
+}
+
+/** Wears a skin you own, from the skins the client offers. Skins you do not own are bought in the client. */
+export async function phoneSkin(client: LcuClient, skinId: unknown) {
+  if (!isSpellOrChamp(skinId)) throw new ActionRefused("pick a skin");
+  await requirePhase(client, "ChampSelect", "pick a skin in champion select");
+  const skins = await skinOffers(client);
+  if (!skins.available) throw new ActionRefused("the skin is locked now");
+  const skin = skins.options.find((s) => s.id === skinId);
+  if (!skin) throw new ActionRefused("that skin is not offered for this champion");
+  if (!skin.owned) throw new ActionRefused("buy that skin in the client first");
+  if (skins.selected !== skinId) await client.patch(MY_SELECTION, { selectedSkinId: skinId });
   return { ok: true };
 }
 
@@ -298,13 +334,21 @@ async function iconReply(path: string, deps: PhoneDeps): Promise<Response> {
   const champion = path.match(/^\/icon\/champion\/(.+)\.png$/);
   const spell = path.match(/^\/icon\/spell\/(.+)$/);
   const rune = path.match(/^\/icon\/rune\/(\d+)\.png$/);
+  // A skin id is the champion's id times 1000, plus the skin's number.
+  const splash = path.match(/^\/icon\/splash\/(\d+)\.jpg$/);
   try {
     let bytes: ArrayBuffer | null = null;
     if (champion) bytes = await championIcon(champion[1], deps.fetch);
     else if (spell) bytes = await spellIcon(spell[1], deps.fetch);
     else if (rune) bytes = await runeIcon(deps.client, Number(rune[1]), deps.fetch);
+    else if (splash) {
+      const skinId = Number(splash[1]);
+      const champ = (await championInfo(deps.client)).get(Math.floor(skinId / 1000));
+      bytes = champ ? await skinArt(champ.alias, skinId % 1000, deps.fetch) : null;
+    }
     if (!bytes) return reply({ error: "not found" }, 404);
-    return new Response(bytes, { headers: { "content-type": "image/png", "cache-control": "private, max-age=86400" } });
+    const type = splash ? "image/jpeg" : "image/png";
+    return new Response(bytes, { headers: { "content-type": type, "cache-control": "private, max-age=86400" } });
   } catch {
     return reply({ error: "icon unavailable" }, 502);
   }
@@ -318,6 +362,7 @@ const ROUTES: Record<string, Route> = {
   "POST /api/choose": (d, b) => phoneChoose(d.client, b.championId, b.lock),
   "POST /api/spells": (d, b) => phoneSpells(d.client, b.spell1, b.spell2),
   "POST /api/swap": (d, b) => phoneSwap(d.client, b.action, b.id),
+  "POST /api/skin": (d, b) => phoneSkin(d.client, b.skinId),
   "POST /api/accept": (d) => phoneReadyCheck(d.client, "accept"),
   "POST /api/decline": (d) => phoneReadyCheck(d.client, "decline"),
   "POST /api/queue": (d) => phoneQueue(d.client),
