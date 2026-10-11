@@ -175,9 +175,6 @@ macOS, Windows and Linux files and attaches them to the GitHub release.
   and loads champion art from public Riot and community image sites.
 - **Download count.** The top right shows how many times the release files have been downloaded,
   read from GitHub's public releases API. Nothing about you is sent.
-- **Optional install count.** If an install counter is set up (a tiny Cloudflare Worker in
-  [`usage-counter/`](usage-counter/)), the app also sends one random ID at most once a day and
-  shows the number of installs. No name, account or game data is sent. Untick **Count me** to opt out.
 
 ## ❓ FAQ
 
