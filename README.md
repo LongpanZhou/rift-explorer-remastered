@@ -173,10 +173,11 @@ macOS, Windows and Linux files and attaches them to the GitHub release.
 
 - **Your data stays on your machine.** The app only talks to the League client on your computer,
   and loads champion art from public Riot and community image sites.
-- **Anonymous install count.** The top right shows how many installs have opened the app.
-  Each install sends one random ID at most once a day. No name, account or game data is sent.
-  Untick **Count me** to opt out. The counter is a tiny Cloudflare Worker in
-  [`usage-counter/`](usage-counter/).
+- **Download count.** The top right shows how many times the release files have been downloaded,
+  read from GitHub's public releases API. Nothing about you is sent.
+- **Optional install count.** If an install counter is set up (a tiny Cloudflare Worker in
+  [`usage-counter/`](usage-counter/)), the app also sends one random ID at most once a day and
+  shows the number of installs. No name, account or game data is sent. Untick **Count me** to opt out.
 
 ## ❓ FAQ
 

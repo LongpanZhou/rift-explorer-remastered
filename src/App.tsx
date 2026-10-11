@@ -1,7 +1,7 @@
 import { lazy, Suspense, useEffect, useState } from "react";
 import "./App.css";
 import Player from "./player/Player";
-import { USAGE_URL, fetchUserCount, reportUse, setUsageOff, usageOff } from "./usage";
+import { USAGE_URL, fetchDownloadCount, fetchUserCount, reportUse, setUsageOff, usageOff } from "./usage";
 
 const ApiDocs = lazy(() => import("./ApiDocs"));
 
@@ -14,12 +14,15 @@ export default function App() {
   // The docs load on first open, then stay mounted like Player, so switching
   // modes never reloads either one.
   const [docsOpened, setDocsOpened] = useState(false);
-  // The anonymous install count, shown top right. Hidden until USAGE_URL is set.
+  // Shown top right: the anonymous install count when USAGE_URL is set, and the
+  // release downloads GitHub counts either way.
   const [users, setUsers] = useState<number | null>(null);
+  const [downloads, setDownloads] = useState<number | null>(null);
   const [off, setOff] = useState(usageOff);
   useEffect(() => {
     reportUse().catch(() => {});
     fetchUserCount().then(setUsers).catch(() => {});
+    fetchDownloadCount().then(setDownloads).catch(() => {});
   }, []);
   return (
     <div className="app">
@@ -37,6 +40,7 @@ export default function App() {
         >
           Developer
         </button>
+        {downloads !== null && <span className="user-count">{downloads.toLocaleString()} downloads</span>}
         {USAGE_URL && (
           <>
             {users !== null && <span className="user-count">{users.toLocaleString()} users</span>}

@@ -33,6 +33,13 @@ mock.module("@tauri-apps/api/core", () => ({
 mock.module("swagger-ui-react/swagger-ui.css", () => ({}));
 mock.module("./App.css", () => ({}));
 
+// The top bar asks GitHub for the release downloads; answer it here instead of the network.
+const realFetch = globalThis.fetch;
+globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) =>
+  String(input).startsWith("https://api.github.com/")
+    ? new Response(JSON.stringify([{ assets: [{ download_count: 3 }, { download_count: 4 }] }]))
+    : realFetch(input, init)) as typeof fetch;
+
 let container: HTMLElement;
 let root: Root;
 
@@ -67,6 +74,8 @@ describe("App renders the spec with Swagger UI", () => {
 
     // Player mode opens first; with no client it shows the error and a Retry.
     expect(await waitFor(() => container.textContent!.includes("not running"))).toBe(true);
+    // The release downloads GitHub counts show in the top bar.
+    expect(await waitFor(() => container.textContent!.includes("7 downloads"))).toBe(true);
 
     const devButton = [...container.querySelectorAll("button")].find(
       (b) => b.textContent === "Developer"
