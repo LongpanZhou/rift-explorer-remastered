@@ -41,6 +41,10 @@ interface ChampionInfo {
 }
 
 let champions: { at: number; map: Map<number, ChampionInfo> } = { at: 0, map: new Map() };
+/** Forgets the champion names, so a test reads its own list. */
+export function resetChampionCache() {
+  champions = { at: 0, map: new Map() };
+}
 async function championInfo(client: LcuClient): Promise<Map<number, ChampionInfo>> {
   if (Date.now() - champions.at > 10 * 60_000) {
     const list: { id: number; name: string; alias: string; roles?: string[] }[] = await client.get("/lol-game-data/assets/v1/champion-summary.json");

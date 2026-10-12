@@ -1,7 +1,7 @@
-import { afterEach, expect, test } from "bun:test";
+import { afterEach, beforeEach, expect, test } from "bun:test";
 import { Window } from "happy-dom";
 import PAGE from "../../app/util/phone-page.html" with { type: "text" };
-import { handlePhone } from "../../app/util/phone";
+import { handlePhone, resetChampionCache } from "../../app/util/phone";
 import type { LcuClient } from "../../app/util/player";
 
 // Runs the real phone page (app/util/phone-page.html) in happy-dom. Its requests go to the
@@ -68,6 +68,9 @@ function champSelect() {
   };
   return { sim, client };
 }
+
+// phone.ts keeps champion names for 10 minutes; other test files fill it with their own list.
+beforeEach(() => resetChampionCache());
 
 let open: Window[] = [];
 afterEach(async () => {
