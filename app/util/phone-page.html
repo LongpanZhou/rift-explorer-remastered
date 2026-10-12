@@ -111,6 +111,7 @@
   .swaps { display: flex; flex-direction: column; gap: 6px; }
   .swap-row { display: flex; align-items: center; justify-content: space-between; gap: 8px; min-height: 40px; padding: 0 10px; border: 1px solid var(--gold); border-radius: 6px; }
   .swap-text { min-width: 0; font-size: 13px; }
+  .swap-buttons { display: flex; flex: none; gap: 6px; }
   .accept { min-height: 40px; padding: 0 14px; border-radius: 6px; background: var(--gold); color: var(--bg); font-weight: 600; }
   .msg { font-size: 13px; color: var(--gold); }
   .msg:empty { display: none; }
@@ -570,9 +571,13 @@
     return li;
   }
 
+  // Search text and names compared without case, accents, spaces or marks: "kaisa" finds Kai'Sa.
+  const fold = (t) => String(t || "").normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase().replace(/[^a-z0-9]/g, "");
+
   function renderPicker(s) {
     const turn = s.turn;
-    const hover = turn ? turn.championId : 0;
+    const plan = s.plan;
+    const hover = turn ? turn.championId : plan ? plan.championId : 0;
     const roles = ["All", ...new Set(s.options.flatMap((o) => o.roles || []))];
     if (!roles.includes(role)) role = "All";
     paint($("chips"), [roles, role], () => roles.map((r) => {
@@ -583,18 +588,21 @@
     }));
 
     const hint = $("hint");
-    hint.textContent = turn ? "Your turn: tap a champion to hover it, then Lock In" : "Waiting for your turn";
+    hint.textContent = turn
+      ? (turn.type === "ban" ? "Your turn: tap a champion to ban, then Lock In" : "Your turn: tap a champion to hover it, then Lock In")
+      : plan ? "Tap a champion to pre-pick it. Your team sees it; lock in on your turn." : "Waiting for your turn";
     hint.classList.toggle("turn", !!turn);
 
-    const q = $("search").value.trim().toLowerCase();
-    const shown = s.options.filter((o) => (role === "All" || (o.roles || []).includes(role)) && o.name.toLowerCase().includes(q));
+    const q = fold($("search").value);
+    const shown = s.options.filter((o) => (role === "All" || (o.roles || []).includes(role)) && (fold(o.name).includes(q) || fold(o.alias).includes(q)));
     paint($("tiles"), [shown, hover, s.options.length], () => {
       if (!shown.length) return s.options.length ? [el("p", "No champion matches.", "warn")] : [];
       return shown.map((o) => {
         const b = el("button", undefined, "tile" + (o.id === hover ? " on" : ""));
         b.type = "button";
         b.append(pic(champSrc(o), ""), el("span", o.name, "tname"));
-        b.onclick = () => act("/api/choose", { championId: o.id, lock: false }, $("msg"), "Hovering " + o.name + ". Lock In when ready.");
+        const done = turn ? "Hovering " + o.name + ". Lock In when ready." : "Pre-picked " + o.name + ".";
+        b.onclick = () => act("/api/choose", { championId: o.id, lock: false }, $("msg"), done);
         return b;
       });
     });
@@ -616,15 +624,21 @@
     }));
   }
 
+  // Swap requests teammates sent you; the server leaves out every other swap state.
   function renderSwaps(s) {
     const items = s.swaps.filter((x) => x && x.id != null);
     $("swaps").hidden = !items.length;
     paint($("swap-items"), items, () => items.map((x) => {
       const row = el("div", undefined, "swap-row");
-      const b = el("button", "Accept", "accept");
-      b.type = "button";
-      b.onclick = () => act("/api/swap", { action: "accept", id: x.id }, $("msg"), "Swap accepted.");
-      row.append(el("span", "Champion swap request (not tested in a live game)", "swap-text"), b);
+      const yes = el("button", "Accept", "accept");
+      yes.type = "button";
+      yes.onclick = () => act("/api/swap", { action: "accept", id: x.id }, $("msg"), "Swap accepted.");
+      const no = el("button", "Decline", "swap");
+      no.type = "button";
+      no.onclick = () => act("/api/swap", { action: "decline", id: x.id }, $("msg"), "Swap declined.");
+      const buttons = el("span", undefined, "swap-buttons");
+      buttons.append(no, yes);
+      row.append(el("span", (x.name ? "Swap for " + x.name + "?" : "A teammate wants to swap champions"), "swap-text"), buttons);
       return row;
     }));
   }

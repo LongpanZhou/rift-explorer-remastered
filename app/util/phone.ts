@@ -16,6 +16,11 @@ const READY_CHECK = "/lol-matchmaking/v1/ready-check";
 const MY_SELECTION = "/lol-champ-select/v1/session/my-selection";
 const SKIN_INFO = "/lol-champ-select/v1/skin-selector-info";
 const SKIN_CAROUSEL = "/lol-champ-select/v1/skin-carousel-skins";
+const SWAPS = "/lol-champ-select/v1/session/champion-swaps";
+
+/** Your pick that has not started yet, if you have one. */
+const upcomingPick = (actions: any[], me: number) =>
+  actions.find((a) => a.actorCellId === me && a.type === "pick" && !a.completed && !a.isInProgress);
 
 export interface PhoneDeps {
   client: LcuClient;
@@ -135,6 +140,8 @@ export async function phoneState(client: LcuClient, fetchFn?: Fetcher) {
   const me = session.localPlayerCellId;
   const actions: any[] = (session.actions ?? []).flat();
   const turn = actions.find((a) => a.actorCellId === me && openAction(a));
+  // Before your turn, the champion on your coming pick is your pre-pick, which your team sees.
+  const plan = turn ? undefined : upcomingPick(actions, me);
   const live = actions.find(openAction);
   const hover: number = turn ? turn.championId || 0 : 0;
   const named = (id: number) => ({
@@ -143,15 +150,19 @@ export async function phoneState(client: LcuClient, fetchFn?: Fetcher) {
   });
   const champs = (ids: number[] | undefined) => (ids ?? []).filter(Boolean).map((id) => ({ id, ...named(id) }));
 
-  const [options, selection, swaps, pages, allSpells, banned, skins] = await Promise.all([
-    turn ? client.get(turn.type === "ban" ? "/lol-champ-select/v1/bannable-champion-ids" : "/lol-champ-select/v1/pickable-champion-ids") : [],
+  const [options, selection, swapList, pages, allSpells, banned, skins] = await Promise.all([
+    turn || plan
+      ? client.get(turn?.type === "ban" ? "/lol-champ-select/v1/bannable-champion-ids" : "/lol-champ-select/v1/pickable-champion-ids")
+      : [],
     client.get(MY_SELECTION).catch(() => null),
-    client.get("/lol-champ-select/v1/session/champion-swaps").catch(() => []),
+    client.get(SWAPS).catch(() => []),
     client.get(PAGES).catch(() => null),
     summonerSpells(fetchFn).catch(() => []),
     disallowedSpells(client, session),
     skinOffers(client),
   ]);
+
+  const swaps: any[] = Array.isArray(swapList) ? swapList : [];
 
   return {
     phase,
@@ -160,7 +171,8 @@ export async function phoneState(client: LcuClient, fetchFn?: Fetcher) {
       leftMs: typeof session.timer?.adjustedTimeLeftInPhase === "number" ? session.timer.adjustedTimeLeftInPhase : null,
       phase: live ? live.type : "",
     },
-    turn: turn ? { championId: hover } : null,
+    turn: turn ? { championId: hover, type: turn.type as string } : null,
+    plan: plan ? { championId: (plan.championId as number) || 0 } : null,
     options: options.map((id: number) => ({ id, ...named(id), roles: info.get(id)?.roles ?? [] })),
     team: (session.myTeam ?? []).map((p: any) => {
       const championId: number = p.championId || p.championPickIntent || 0;
@@ -174,7 +186,7 @@ export async function phoneState(client: LcuClient, fetchFn?: Fetcher) {
         spells: typeof p.spell1Id === "number" && typeof p.spell2Id === "number" ? { spell1: p.spell1Id, spell2: p.spell2Id } : null,
         locked,
         hovering: !locked && championId !== 0,
-        swappable: p.cellId !== me,
+        swappable: p.cellId !== me && swaps.some((x) => x.cellId === p.cellId && x.state === "AVAILABLE"),
       };
     }),
     bans: {
@@ -191,14 +203,22 @@ export async function phoneState(client: LcuClient, fetchFn?: Fetcher) {
     spells: selection ? { spell1: selection.spell1Id, spell2: selection.spell2Id } : null,
     spellList: allSpells.map((s) => ({ id: s.id, name: s.name, file: s.file, disallowed: banned.includes(s.id) })),
     runes: runeState(pages),
-    swaps,
+    // Only requests a teammate sent you. The client lists every teammate, whatever the state.
+    swaps: swaps
+      .filter((x) => x.state === "RECEIVED" && isSpellOrChamp(x.id))
+      .map((x) => {
+        const from = (session.myTeam ?? []).find((p: any) => p.cellId === x.cellId);
+        const champ = from ? from.championId || from.championPickIntent || 0 : 0;
+        return { id: x.id as number, cellId: x.cellId as number, ...named(champ) };
+      }),
     skins,
   };
 }
 
 /**
  * Hovers or locks a champion for your current pick or ban. A lock with no champion locks
- * the one you are hovering.
+ * the one you are hovering. Before your turn, a hover sets the champion on your coming pick
+ * (a pre-pick, as in the client); locking waits for your turn.
  */
 export async function phoneChoose(client: LcuClient, championId: unknown, lock: unknown) {
   const locking = lock === true;
@@ -207,8 +227,9 @@ export async function phoneChoose(client: LcuClient, championId: unknown, lock: 
   const session = await client.get("/lol-champ-select/v1/session");
   const me = session.localPlayerCellId;
   const actions: any[] = (session.actions ?? []).flat();
-  const turn = actions.find((a) => a.actorCellId === me && openAction(a));
-  if (!turn) throw new ActionRefused("it is not your turn");
+  const current = actions.find((a) => a.actorCellId === me && openAction(a));
+  const turn = current ?? (locking ? undefined : upcomingPick(actions, me));
+  if (!turn) throw new ActionRefused(locking ? "it is not your turn" : "you have no pick left");
   const id = useHover ? turn.championId : championId;
   if (!isSpellOrChamp(id)) throw new ActionRefused("hover a champion first");
   const allowed: number[] = await client.get(
@@ -216,10 +237,8 @@ export async function phoneChoose(client: LcuClient, championId: unknown, lock: 
   );
   if (!allowed.includes(id)) throw new ActionRefused("that champion is not available to you");
   if (takenBy(session, actions, me).has(id)) throw new ActionRefused("a teammate has that champion");
-  await client.patch(`/lol-champ-select/v1/session/actions/${turn.id}`, {
-    championId: id,
-    completed: locking,
-  });
+  // A pre-pick sends only the champion: the action has not started, so it cannot be completed.
+  await client.patch(`/lol-champ-select/v1/session/actions/${turn.id}`, current ? { championId: id, completed: locking } : { championId: id });
   return { ok: true };
 }
 
@@ -246,11 +265,11 @@ export async function phoneRune(client: LcuClient, id: unknown) {
 }
 
 /** Asks for a champion swap with a teammate, or accepts one. Not yet tested in a live game. */
-export async function phoneSwap(client: LcuClient, action: "request" | "accept", id: unknown) {
-  // The action goes into the request path, so only the two known words are allowed.
-  if (action !== "request" && action !== "accept") throw new ActionRefused("pick a swap");
+export async function phoneSwap(client: LcuClient, action: "request" | "accept" | "decline", id: unknown) {
+  // The action goes into the request path, so only the known words are allowed.
+  if (action !== "request" && action !== "accept" && action !== "decline") throw new ActionRefused("pick a swap");
   if (!isSpellOrChamp(id)) throw new ActionRefused("pick a swap");
-  await client.post(`/lol-champ-select/v1/session/champion-swaps/${id}/${action}`, {});
+  await client.post(`${SWAPS}/${id}/${action}`, {});
   return { ok: true };
 }
 
