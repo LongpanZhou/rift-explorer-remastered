@@ -1,6 +1,6 @@
 import { beforeEach, expect, test } from "bun:test";
 import { ActionRefused, type LcuClient } from "./player";
-import { handlePhone, phoneSwap, phoneCancelQueue, phoneChoose, phoneLeaveLobby, phoneMode, phoneQueue, phoneReadyCheck, phoneSkin, phoneSpells, phoneState, resetModeCache, type PhoneDeps } from "./phone";
+import { handlePhone, phoneDodge, phoneSwap, phoneCancelQueue, phoneChoose, phoneLeaveLobby, phoneMode, phoneQueue, phoneReadyCheck, phoneSkin, phoneSpells, phoneState, resetModeCache, type PhoneDeps } from "./phone";
 import { resetIconCache } from "./phoneIcons";
 import { resetRuneIconCache } from "./phoneRunes";
 import { fakeClient } from "./fakeClient";
@@ -33,6 +33,7 @@ const BANNABLE = "/lol-champ-select/v1/bannable-champion-ids";
 const NAMES = "/lol-game-data/assets/v1/champion-summary.json";
 const SELECTION = "/lol-champ-select/v1/session/my-selection";
 const SWAPS = "/lol-champ-select/v1/session/champion-swaps";
+const ORDER_SWAPS = "/lol-champ-select/v1/session/pick-order-swaps";
 const PAGES = "/lol-perks/v1/pages";
 const DISALLOWED = "/lol-gameflow/v1/session/per-position-summoner-spells/disallowed";
 const ACTION = "/lol-champ-select/v1/session/actions/7";
@@ -80,6 +81,7 @@ const world = (actions: any[][], extra: any = {}) => ({
   ],
   [SELECTION]: { spell1Id: 4, spell2Id: 14 },
   [SWAPS]: [],
+  [ORDER_SWAPS]: [],
   [PAGES]: PAGES_LIST,
   [DISALLOWED]: [14],
 });
@@ -139,11 +141,11 @@ test("state includes the team, bans, enemies, spell list, runes and swaps", asyn
   });
   const state: any = await phoneState(client, ddragon().fetch);
   expect(state.team).toEqual([
-    { cellId: 2, mine: true, championId: 0, name: "", alias: "", position: "MID", spells: { spell1: 4, spell2: 14 }, locked: false, hovering: false, swap: null },
+    { cellId: 2, mine: true, championId: 0, name: "", alias: "", position: "MID", spells: { spell1: 4, spell2: 14 }, locked: false, hovering: false, swap: null, orderSwap: null },
     // Swap requests go to the client's swap id (31), not the teammate's cell (3).
-    { cellId: 3, mine: false, championId: 1, name: "Annie", alias: "Annie", position: "JGL", spells: null, locked: true, hovering: false, swap: { id: 31, state: "AVAILABLE" } },
+    { cellId: 3, mine: false, championId: 1, name: "Annie", alias: "Annie", position: "JGL", spells: null, locked: true, hovering: false, swap: { id: 31, state: "AVAILABLE" }, orderSwap: null },
     // Cell 4 sent you a request: answered from the pop-up, not with a Swap button.
-    { cellId: 4, mine: false, championId: 3, name: "Galio", alias: "Galio", position: "SUP", spells: null, locked: false, hovering: true, swap: null },
+    { cellId: 4, mine: false, championId: 3, name: "Galio", alias: "Galio", position: "SUP", spells: null, locked: false, hovering: true, swap: null, orderSwap: null },
   ]);
   expect(state.bans).toEqual({ mine: [{ id: 2, name: "Olaf", alias: "Olaf" }], theirs: [{ id: 9, name: "Ahri", alias: "Ahri" }] });
   expect(state.enemies).toEqual([
@@ -155,7 +157,7 @@ test("state includes the team, bans, enemies, spell list, runes and swaps", asyn
     { id: 14, name: "Ignite", file: "SummonerDot.png", disallowed: true },
   ]);
   expect(state.runes).toEqual({ current: { id: 12, name: "Fixed" } });
-  expect(state.swaps).toEqual([{ id: 32, cellId: 4, name: "Galio", alias: "Galio" }]);
+  expect(state.swaps).toEqual([{ kind: "champion", id: 32, cellId: 4, name: "Galio", alias: "Galio", position: "SUP" }]);
 });
 
 // Your pick has not started: someone else is banning or picking.
@@ -192,7 +194,7 @@ test("a swap you asked for shows as sent and can be cancelled", async () => {
   const { client, writes } = fakeClient({ ...world([[turnPick]]), [SWAPS]: [{ id: 31, cellId: 3, state: "SENT" }] });
   const state: any = await phoneState(client, ddragon().fetch);
   expect(state.team[1].swap).toEqual({ id: 31, state: "SENT" });
-  await phoneSwap(client, "cancel", 31);
+  await phoneSwap(client, "champion", "cancel", 31);
   expect(writes).toEqual([{ method: "POST", path: `${SWAPS}/31/cancel`, body: {} }]);
 });
 
@@ -231,8 +233,48 @@ test("with no pick left, there is nothing to pre-pick", async () => {
 
 test("a swap request can be declined", async () => {
   const s = fakeClient(world([[turnPick]]));
-  await phoneSwap(s.client, "decline", 32);
+  await phoneSwap(s.client, "champion", "decline", 32);
   expect(s.writes).toEqual([{ method: "POST", path: `${SWAPS}/32/decline`, body: {} }]);
+});
+
+test("pick order swaps: offered per teammate by swap id, requests pop up, and every action goes to the pick order list", async () => {
+  const support = { cellId: 4, championId: 0, championPickIntent: 3, assignedPosition: "utility" };
+  const { client, writes } = fakeClient({
+    ...world([[turnPick]], { myTeam: [...team, support] }),
+    [ORDER_SWAPS]: [
+      { id: 41, cellId: 3, state: "AVAILABLE" },
+      { id: 42, cellId: 4, state: "RECEIVED" },
+    ],
+  });
+  const state: any = await phoneState(client, ddragon().fetch);
+  expect(state.team[1].orderSwap).toEqual({ id: 41, state: "AVAILABLE" });
+  expect(state.team[1].swap).toBeNull();
+  expect(state.swaps).toEqual([{ kind: "pick-order", id: 42, cellId: 4, name: "Galio", alias: "Galio", position: "SUP" }]);
+  for (const action of ["request", "cancel", "accept", "decline"]) await phoneSwap(client, "pick-order", action, 41);
+  expect(writes.map((w) => w.path)).toEqual(["request", "cancel", "accept", "decline"].map((a) => `${ORDER_SWAPS}/41/${a}`));
+});
+
+test("a swap of an unknown kind or action is refused, and nothing is sent", async () => {
+  const { client, writes } = fakeClient(world([[turnPick]]));
+  for (const [kind, action] of [["position", "request"], ["champion", "delete"], ["../x", "request"]]) {
+    await expect(phoneSwap(client, kind, action, 41)).rejects.toBeInstanceOf(ActionRefused);
+  }
+  expect(writes).toEqual([]);
+});
+
+test("dodge leaves champion select through the client's quit call, and only from champ select", async () => {
+  const { client, writes } = fakeClient(world([[turnPick]]));
+  expect(await phoneDodge(client)).toEqual({ ok: true });
+  expect(writes).toHaveLength(1);
+  const url = new URL(writes[0].path, "https://127.0.0.1");
+  expect(url.pathname).toBe("/lol-login/v1/session/invoke");
+  expect(url.searchParams.get("destination")).toBe("lcdsServiceProxy");
+  expect(url.searchParams.get("method")).toBe("call");
+  expect(JSON.parse(url.searchParams.get("args")!)).toEqual(["", "teambuilder-draft", "quitV2", ""]);
+
+  const lobby = fakeClient({ [PHASE]: "Lobby" });
+  await expect(phoneDodge(lobby.client)).rejects.toBeInstanceOf(ActionRefused);
+  expect(lobby.writes).toEqual([]);
 });
 
 test("choose hovers, locks, and refuses a champion a teammate has or is not allowed", async () => {

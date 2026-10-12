@@ -1,7 +1,9 @@
 import { afterEach, beforeEach, expect, test } from "bun:test";
 import { Window } from "happy-dom";
 import PAGE from "../../app/util/phone-page.html" with { type: "text" };
-import { handlePhone, resetChampionCache } from "../../app/util/phone";
+import { handlePhone, resetChampionCache, resetModeCache } from "../../app/util/phone";
+import { resetIconCache } from "../../app/util/phoneIcons";
+import { resetRuneIconCache } from "../../app/util/phoneRunes";
 import type { LcuClient } from "../../app/util/player";
 
 // Runs the real phone page (app/util/phone-page.html) in happy-dom. Its requests go to the
@@ -16,9 +18,64 @@ const NAMES = [
   { id: 145, name: "Kai'Sa", alias: "Kaisa", roles: ["marksman"] },
 ];
 
-/** A champ select the test changes as it goes. You are cell 2; teammates 3 to 6. */
+// Data Dragon as the page's server sees it: spells for the spell sheet. Mark is ARAM only.
+const SUMMONER_JSON = {
+  data: {
+    SummonerFlash: { key: "4", name: "Flash", image: { full: "SummonerFlash.png" }, modes: ["CLASSIC", "ARAM"] },
+    SummonerDot: { key: "14", name: "Ignite", image: { full: "SummonerDot.png" }, modes: ["CLASSIC", "ARAM"] },
+    SummonerHeal: { key: "7", name: "Heal", image: { full: "SummonerHeal.png" }, modes: ["CLASSIC", "ARAM"] },
+    SummonerSnowball: { key: "32", name: "Mark", image: { full: "SummonerSnowball.png" }, modes: ["ARAM"] },
+  },
+};
+const dataDragon = async (url: string) => {
+  if (url.endsWith("/api/versions.json")) return Response.json(["16.1.1"]);
+  if (url.endsWith("/summoner.json")) return Response.json(SUMMONER_JSON);
+  return new Response("not here", { status: 404 });
+};
+
+// Rune trees as the client lists them: a keystone slot, three rune rows, then three shard rows.
+const SHARDS = [[5005, 5008, 5007], [5008, 5002, 5003], [5001, 5002, 5003]];
+const TREE_IDS = [8000, 8100, 8200, 8300, 8400];
+const style = (id: number, name: string, keystones: number[], rows: number[][]) => ({
+  id,
+  name,
+  iconPath: `/lol-game-data/assets/v1/perk-images/styles/${id}.png`,
+  allowedSubStyles: TREE_IDS.filter((x) => x !== id),
+  defaultSubStyle: TREE_IDS.find((x) => x !== id),
+  slots: [
+    { type: "kKeyStone", perks: keystones },
+    ...rows.map((perks) => ({ type: "kMixedRegularSplashable", perks })),
+    ...SHARDS.map((perks) => ({ type: "kStatMod", perks })),
+  ],
+});
+const STYLES = [
+  style(8000, "Precision", [8005, 8008], [[9101, 9111, 8009], [9104, 9105, 9103], [8014, 8017, 8299]]),
+  style(8100, "Domination", [8128], [[8126, 8139, 8135], [8105, 8106, 8138], [8134, 8120, 8143]]),
+  style(8200, "Sorcery", [8214, 8229, 8230], [[8224, 8226, 8210], [8237, 8233, 8236], [8242, 8234, 8232]]),
+  style(8300, "Inspiration", [8351, 8360, 8369], [[8306, 8304, 8313], [8321, 8316, 8345], [8347, 8410, 8352]]),
+  style(8400, "Resolve", [8437, 8439, 8465], [[8446, 8429, 8451], [8444, 8473, 8453], [8463, 8401, 8475]]),
+];
+const PERKS = [...new Set(STYLES.flatMap((x) => x.slots.flatMap((sl) => sl.perks)))].map((id) => ({ id, name: `Rune ${id}`, iconPath: "" }));
+// Precision (Press the Attack) with Domination: keystone, 3 primary runes, 2 secondary, 3 shards.
+const RUNES = [8005, 9101, 9104, 8014, 8126, 8105, 5007, 5002, 5001];
+const QUEUES = [
+  { id: 420, description: "Ranked Solo/Duo", queueAvailability: "Available", category: "PvP", gameSelectModeGroup: "kSummonersRift" },
+  { id: 430, description: "Normal Blind", queueAvailability: "Available", category: "PvP", gameSelectModeGroup: "kSummonersRift" },
+  { id: 450, description: "ARAM", queueAvailability: "Available", category: "PvP", gameSelectModeGroup: "kARAM" },
+];
+
+/** A League client the test changes as it goes. In champ select you are cell 2; teammates 3 to 6. */
 function champSelect() {
   const sim = {
+    phase: "ChampSelect",
+    queueId: 420,
+    readyResponse: "None",
+    spells: [4, 14],
+    pages: [
+      { id: 11, name: "Fixed", current: false, isEditable: false, primaryStyleId: 8000, subStyleId: 8100, selectedPerkIds: RUNES },
+      { id: 13, name: "Ekko", current: true, isEditable: true, primaryStyleId: 8000, subStyleId: 8100, selectedPerkIds: RUNES },
+    ],
+    orderSwaps: [] as any[],
     myPick: { id: 7, actorCellId: 2, type: "pick", isInProgress: false, completed: false, championId: 0 },
     otherTurn: { id: 5, actorCellId: 3, type: "ban", isInProgress: true, completed: false, championId: 0 } as any,
     enemyPicks: [] as any[],
@@ -36,8 +93,17 @@ function champSelect() {
           sim.hangNext = false;
           return new Promise(() => {});
         }
-        return "ChampSelect";
+        return sim.phase;
       }
+      if (p === "/lol-lobby/v2/lobby") return { gameConfig: { queueId: sim.queueId } };
+      if (p === "/lol-game-queues/v1/queues") return QUEUES;
+      if (p === "/lol-matchmaking/v1/search") return { searchState: "Searching", timeInQueue: 12, estimatedQueueTime: 90 };
+      if (p === "/lol-matchmaking/v1/ready-check") return { state: "InProgress", playerResponse: sim.readyResponse, timer: 8 };
+      if (p === "/lol-champ-select/v1/session/my-selection") return { spell1Id: sim.spells[0], spell2Id: sim.spells[1] };
+      if (p === "/lol-champ-select/v1/session/pick-order-swaps") return sim.orderSwaps;
+      if (p === "/lol-perks/v1/pages") return sim.pages;
+      if (p === "/lol-perks/v1/perks") return PERKS;
+      if (p === "/lol-perks/v1/styles") return STYLES;
       if (p === "/lol-champ-select/v1/session")
         return {
           localPlayerCellId: 2,
@@ -62,6 +128,7 @@ function champSelect() {
     patch: async (path, body: any) => {
       sim.writes.push({ method: "PATCH", path, body });
       if (path === "/lol-champ-select/v1/session/actions/7") sim.myPick = { ...sim.myPick, ...body };
+      if (path === "/lol-champ-select/v1/session/my-selection" && body.spell1Id) sim.spells = [body.spell1Id, body.spell2Id];
     },
     post: async (path, body) => void sim.writes.push({ method: "POST", path, body }),
     put: async (path, body) => void sim.writes.push({ method: "PUT", path, body }),
@@ -72,7 +139,12 @@ function champSelect() {
 }
 
 // phone.ts keeps champion names for 10 minutes; other test files fill it with their own list.
-beforeEach(() => resetChampionCache());
+beforeEach(() => {
+  resetChampionCache();
+  resetModeCache();
+  resetIconCache();
+  resetRuneIconCache();
+});
 
 let open: Window[] = [];
 afterEach(async () => {
@@ -89,8 +161,7 @@ async function openPage(client: LcuClient) {
       // The page gives up on a request with its AbortController; a stuck request must honor it.
       init.signal?.addEventListener("abort", () => reject(new Error("aborted")));
       const req = new Request(new URL(input, "http://phone.test/"), { method: init.method, headers: init.headers, body: init.body });
-      // Data Dragon is not reached: icons are not part of these checks.
-      handlePhone(req, { client, fetch: (async () => new Response("[]", { status: 500 })) as any }).then(resolve, reject);
+      handlePhone(req, { client, fetch: dataDragon as any }).then(resolve, reject);
     });
   w.document.write(PAGE as unknown as string);
   const doc = w.document;
@@ -112,8 +183,8 @@ async function openPage(client: LcuClient) {
       }
     },
   };
-  await page.until(() => page.$("phase").textContent !== "" && page.$("phase").textContent !== "Not connected");
-  await page.until(() => page.texts("#team .nm").length === 5);
+  const connected = () => !["", "Connecting...", "Not connected"].includes(page.$("phase").textContent);
+  await page.until(() => connected() && (page.$("zones").hidden || page.texts("#team .nm").length === 5));
   return page;
 }
 
@@ -210,7 +281,7 @@ test("asking a teammate for a swap uses the client's swap id, and a sent request
   expect(sim.writes[0]).toEqual({ method: "POST", path: "/lol-champ-select/v1/session/champion-swaps/21/request", body: {} });
 
   sim.swaps = [{ id: 21, cellId: 3, state: "SENT" }];
-  await page.until(() => page.texts("#team .tag").includes("Swap asked"), 3000);
+  await page.until(() => page.texts("#team .tag").includes("Champion swap asked"), 3000);
   const cancel = page.$("team").querySelector("button.swap");
   expect(cancel.textContent).toBe("Cancel");
   cancel.click();
@@ -259,3 +330,174 @@ test("updates keep coming after a request that is never answered", async () => {
   // The page gives up on the stuck request after 4 s, then updates again.
   await page.until(() => page.texts("#enemies .nm")[0] === "Olaf", 9000);
 }, 15000);
+
+// ---- The features asked for, one by one, through the phone page. ----
+
+/** The first button under `root` whose text is `text`. */
+const button = (root: any, text: string) => [...root.querySelectorAll("button")].find((b: any) => b.textContent === text) as any;
+
+test("pick order: ask a teammate to swap by the client's swap id, and answer a request sent to you", async () => {
+  const { sim, client } = champSelect();
+  sim.orderSwaps = [
+    { id: 41, cellId: 3, state: "AVAILABLE" },
+    { id: 42, cellId: 4, state: "RECEIVED" },
+    { id: 43, cellId: 5, state: "BUSY" },
+  ];
+  const page = await openPage(client);
+  await page.until(() => !page.$("swaps").hidden);
+  // Cell 4 is hovering Galio: the one request names them.
+  expect(page.texts("#swap-items .swap-text")).toEqual(["Swap pick order with Galio?"]);
+  // One "Swap order" button, on cell 3's row.
+  const rows = [...page.$("team").querySelectorAll("li")];
+  expect(rows.map((r: any) => (button(r, "Swap order") ? 1 : 0))).toEqual([0, 1, 0, 0, 0]);
+
+  button(rows[1], "Swap order").click();
+  await page.until(() => sim.writes.length === 1);
+  expect(sim.writes[0]).toEqual({ method: "POST", path: "/lol-champ-select/v1/session/pick-order-swaps/41/request", body: {} });
+
+  button(page.$("swap-items"), "Accept").click();
+  await page.until(() => sim.writes.length === 2);
+  expect(sim.writes[1].path).toBe("/lol-champ-select/v1/session/pick-order-swaps/42/accept");
+});
+
+test("summoner spells: the sheet lists Summoner's Rift spells, and a tap saves the pair", async () => {
+  const { sim, client } = champSelect();
+  const page = await openPage(client);
+  await page.until(() => !page.$("spell1").disabled);
+  page.$("spell1").click();
+  await page.until(() => page.texts("#spell-list .opt-name").length > 0);
+  expect(page.texts("#spell-list .opt-name")).toEqual(["Flash", "Ignite", "Heal"]);
+  // A spell button holds its icon and its name.
+  const heal = [...page.$("spell-list").querySelectorAll("button")].find((b: any) => b.querySelector(".opt-name").textContent === "Heal") as any;
+  heal.click();
+  await page.until(() => page.$("spell-msg").textContent === "Spells saved.");
+  expect(sim.writes).toEqual([{ method: "PATCH", path: "/lol-champ-select/v1/session/my-selection", body: { spell1Id: 7, spell2Id: 14 } }]);
+  // The bar shows the new pair after the next update.
+  await page.until(() => page.$("spell1").getAttribute("aria-label") === "Spell: Heal", 3000);
+});
+
+test("runes: open a page, change the keystone, save; a locked page cannot be edited", async () => {
+  const { sim, client } = champSelect();
+  const page = await openPage(client);
+  page.$("runes").click();
+  await page.until(() => page.texts("#rune-list .opt-name").length === 2);
+  expect(page.texts("#rune-list .opt-name")).toEqual(["Fixed", "Ekko"]);
+  const [fixed, ekko] = [...page.$("rune-list").querySelectorAll(".rune-row")] as any[];
+  expect(button(fixed, "Locked").disabled).toBe(true);
+
+  button(ekko, "Edit").click();
+  expect(page.$("rune-edit-view").hidden).toBe(false);
+  // The keystone row holds Press the Attack (8005) and Lethal Tempo (8008); pick Lethal Tempo.
+  const keystones = page.$("rune-body").querySelector(".rune-grid.wide");
+  [...keystones.querySelectorAll("button")][1].click();
+  page.$("rune-name").value = "Ekko AP";
+  page.$("rune-save").click();
+  await page.until(() => sim.writes.length === 1);
+  expect(sim.writes[0]).toEqual({
+    method: "PUT",
+    path: "/lol-perks/v1/pages/13",
+    body: { name: "Ekko AP", primaryStyleId: 8000, subStyleId: 8100, selectedPerkIds: [8008, ...RUNES.slice(1)], current: true },
+  });
+  await page.until(() => page.$("rune-edit-msg").textContent === "Saved.");
+});
+
+test("runes: a page missing a choice is not sent, and the missing choice is named", async () => {
+  const { sim, client } = champSelect();
+  const page = await openPage(client);
+  page.$("runes").click();
+  await page.until(() => page.texts("#rune-list .opt-name").length === 2);
+  button(page.$("rune-list").querySelectorAll(".rune-row")[1], "Edit").click();
+  // Switching the primary tree clears its keystone and rows.
+  const sorcery = [...page.$("rune-body").querySelectorAll(".rtree")].find((b: any) => b.textContent === "Sorcery") as any;
+  sorcery.click();
+  page.$("rune-save").click();
+  expect(page.$("rune-edit-msg").textContent).toBe("Pick a keystone.");
+  await Bun.sleep(100);
+  expect(sim.writes).toEqual([]);
+});
+
+test("lobby: switch the mode, queue up, then cancel the search", async () => {
+  const { sim, client } = champSelect();
+  sim.phase = "Lobby";
+  const page = await openPage(client);
+  await page.until(() => !page.$("modes").hidden);
+  expect(page.$("phase").textContent).toBe("In a lobby");
+  expect(page.texts("#modes .chip")).toEqual(["Ranked Solo/Duo", "Normal Blind", "ARAM"]);
+  expect(page.texts("#modes .chip.on")).toEqual(["Ranked Solo/Duo"]);
+
+  button(page.$("modes"), "ARAM").click();
+  await page.until(() => sim.writes.length === 1);
+  expect(sim.writes[0]).toEqual({ method: "POST", path: "/lol-lobby/v2/lobby", body: { queueId: 450 } });
+
+  page.$("queue").click();
+  await page.until(() => sim.writes.length === 2);
+  expect(sim.writes[1]).toEqual({ method: "POST", path: "/lol-lobby/v2/lobby/matchmaking/search", body: {} });
+
+  sim.phase = "Matchmaking";
+  await page.until(() => !page.$("cancel").hidden, 3000);
+  expect(page.$("queue").hidden).toBe(true);
+  page.$("cancel").click();
+  await page.until(() => sim.writes.length === 3);
+  expect(sim.writes[2]).toEqual({ method: "DELETE", path: "/lol-lobby/v2/lobby/matchmaking/search", body: undefined });
+});
+
+test("match found: accept it", async () => {
+  const { sim, client } = champSelect();
+  sim.phase = "ReadyCheck";
+  const page = await openPage(client);
+  expect(page.$("phase").textContent).toBe("Match found");
+  page.$("accept").click();
+  await page.until(() => sim.writes.length === 1);
+  expect(sim.writes[0]).toEqual({ method: "POST", path: "/lol-matchmaking/v1/ready-check/accept", body: {} });
+  // Once answered, the buttons are turned off.
+  sim.readyResponse = "Accepted";
+  await page.until(() => page.$("accept").disabled, 3000);
+  expect(page.$("decline").disabled).toBe(true);
+});
+
+test("match found: decline it", async () => {
+  const { sim, client } = champSelect();
+  sim.phase = "ReadyCheck";
+  const page = await openPage(client);
+  page.$("decline").click();
+  await page.until(() => sim.writes.length === 1);
+  expect(sim.writes[0]).toEqual({ method: "POST", path: "/lol-matchmaking/v1/ready-check/decline", body: {} });
+});
+
+test("dodge: one tap only warns, a second tap leaves champion select", async () => {
+  const { sim, client } = champSelect();
+  const page = await openPage(client);
+  page.$("dodge").click();
+  expect(page.$("dodge").textContent).toBe("Tap again to dodge (LP loss and a queue wait)");
+  await Bun.sleep(100);
+  expect(sim.writes).toEqual([]);
+  page.$("dodge").click();
+  await page.until(() => sim.writes.length === 1);
+  const url = new URL(sim.writes[0].path, "https://127.0.0.1");
+  expect(url.pathname).toBe("/lol-login/v1/session/invoke");
+  expect(JSON.parse(url.searchParams.get("args")!)).toEqual(["", "teambuilder-draft", "quitV2", ""]);
+  expect(page.$("dodge").textContent).toBe("Dodge");
+});
+
+test("dodge: a single tap wears off after 4 s", async () => {
+  const { sim, client } = champSelect();
+  const page = await openPage(client);
+  page.$("dodge").click();
+  await page.until(() => page.$("dodge").textContent === "Dodge", 5000);
+  page.$("dodge").click();
+  await Bun.sleep(100);
+  expect(sim.writes).toEqual([]);
+}, 10000);
+
+test("leave the lobby: two taps", async () => {
+  const { sim, client } = champSelect();
+  sim.phase = "Lobby";
+  const page = await openPage(client);
+  await page.until(() => !page.$("leave").hidden);
+  page.$("leave").click();
+  await Bun.sleep(100);
+  expect(sim.writes).toEqual([]);
+  page.$("leave").click();
+  await page.until(() => sim.writes.length === 1);
+  expect(sim.writes[0]).toEqual({ method: "DELETE", path: "/lol-lobby/v2/lobby", body: undefined });
+});

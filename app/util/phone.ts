@@ -16,7 +16,17 @@ const READY_CHECK = "/lol-matchmaking/v1/ready-check";
 const MY_SELECTION = "/lol-champ-select/v1/session/my-selection";
 const SKIN_INFO = "/lol-champ-select/v1/skin-selector-info";
 const SKIN_CAROUSEL = "/lol-champ-select/v1/skin-carousel-skins";
-const SWAPS = "/lol-champ-select/v1/session/champion-swaps";
+/** The two swaps a teammate can be asked for. Each list holds { id, cellId, state } per teammate. */
+const SWAP_PATHS = {
+  champion: "/lol-champ-select/v1/session/champion-swaps",
+  "pick-order": "/lol-champ-select/v1/session/pick-order-swaps",
+} as const;
+type SwapKind = keyof typeof SWAP_PATHS;
+// The client's quit call, which leaves champ select (a dodge). It is not in the client's REST
+// list under champ select; tools use this login service call. Not yet tested in a live game.
+const DODGE =
+  "/lol-login/v1/session/invoke?destination=lcdsServiceProxy&method=call&args=" +
+  encodeURIComponent(JSON.stringify(["", "teambuilder-draft", "quitV2", ""]));
 
 /** Your pick that has not started yet, if you have one. */
 const upcomingPick = (actions: any[], me: number) =>
@@ -158,23 +168,30 @@ export async function phoneState(client: LcuClient, fetchFn?: Fetcher) {
   });
   const champs = (ids: number[] | undefined) => (ids ?? []).filter(Boolean).map((id) => ({ id, ...named(id) }));
 
-  const [options, selection, swapList, pages, allSpells, banned, skins] = await Promise.all([
+  const [options, selection, champSwaps, orderSwaps, pages, allSpells, banned, skins] = await Promise.all([
     turn || plan
       ? client.get(turn?.type === "ban" ? "/lol-champ-select/v1/bannable-champion-ids" : "/lol-champ-select/v1/pickable-champion-ids")
       : [],
     client.get(MY_SELECTION).catch(() => null),
-    client.get(SWAPS).catch(() => []),
+    client.get(SWAP_PATHS.champion).catch(() => []),
+    client.get(SWAP_PATHS["pick-order"]).catch(() => []),
     client.get(PAGES).catch(() => null),
     summonerSpells(fetchFn).catch(() => []),
     disallowedSpells(client, session),
     skinOffers(client),
   ]);
 
-  const swaps: any[] = Array.isArray(swapList) ? swapList : [];
-  const swapWith = (cellId: number) => {
-    const x = cellId === me ? undefined : swaps.find((w) => w.cellId === cellId && isSpellOrChamp(w.id));
+  const lists: Record<SwapKind, any[]> = {
+    champion: Array.isArray(champSwaps) ? champSwaps : [],
+    "pick-order": Array.isArray(orderSwaps) ? orderSwaps : [],
+  };
+  // The swap of one kind with a teammate, by the client's swap id: requests go to that id, not
+  // the cell. Only a swap you can ask for (AVAILABLE) or have asked for (SENT).
+  const swapWith = (kind: SwapKind, cellId: number) => {
+    const x = cellId === me ? undefined : lists[kind].find((w) => w.cellId === cellId && isSpellOrChamp(w.id));
     return x && (x.state === "AVAILABLE" || x.state === "SENT") ? { id: x.id as number, state: x.state as string } : null;
   };
+  const position = (p: any) => POSITIONS.get(p?.assignedPosition) ?? "";
 
   return {
     phase,
@@ -200,12 +217,12 @@ export async function phoneState(client: LcuClient, fetchFn?: Fetcher) {
         mine: p.cellId === me,
         championId,
         ...named(championId),
-        position: POSITIONS.get(p.assignedPosition) ?? "",
+        position: position(p),
         spells: typeof p.spell1Id === "number" && typeof p.spell2Id === "number" ? { spell1: p.spell1Id, spell2: p.spell2Id } : null,
         locked,
         hovering: !locked && championId !== 0,
-        // The swap with this teammate, by the client's swap id: requests go to that id, not the cell.
-        swap: swapWith(p.cellId),
+        swap: swapWith("champion", p.cellId),
+        orderSwap: swapWith("pick-order", p.cellId),
       };
     }),
     bans: {
@@ -223,13 +240,15 @@ export async function phoneState(client: LcuClient, fetchFn?: Fetcher) {
     spellList: allSpells.map((s) => ({ id: s.id, name: s.name, file: s.file, disallowed: banned.includes(s.id) })),
     runes: runeState(pages),
     // Only requests a teammate sent you. The client lists every teammate, whatever the state.
-    swaps: swaps
-      .filter((x) => x.state === "RECEIVED" && isSpellOrChamp(x.id))
-      .map((x) => {
-        const from = (session.myTeam ?? []).find((p: any) => p.cellId === x.cellId);
-        const champ = from ? from.championId || from.championPickIntent || 0 : 0;
-        return { id: x.id as number, cellId: x.cellId as number, ...named(champ) };
-      }),
+    swaps: (Object.keys(lists) as SwapKind[]).flatMap((kind) =>
+      lists[kind]
+        .filter((x) => x.state === "RECEIVED" && isSpellOrChamp(x.id))
+        .map((x) => {
+          const from = (session.myTeam ?? []).find((p: any) => p.cellId === x.cellId);
+          const champ = from ? from.championId || from.championPickIntent || 0 : 0;
+          return { kind, id: x.id as number, cellId: x.cellId as number, ...named(champ), position: position(from) };
+        })
+    ),
     skins,
   };
 }
@@ -286,15 +305,23 @@ export async function phoneRune(client: LcuClient, id: unknown) {
 }
 
 /**
- * Requests, cancels, accepts or declines a champion swap. `id` is the swap's id from the
- * client's swap list, not a cell. Not yet tested in a live game.
+ * Requests, cancels, accepts or declines a champion or pick order swap. `id` is the swap's id
+ * from the client's swap list, not a cell. Not yet tested in a live game.
  */
 const SWAP_ACTIONS = ["request", "cancel", "accept", "decline"];
-export async function phoneSwap(client: LcuClient, action: "request" | "cancel" | "accept" | "decline", id: unknown) {
-  // The action goes into the request path, so only the known words are allowed.
-  if (!SWAP_ACTIONS.includes(action)) throw new ActionRefused("pick a swap");
+export async function phoneSwap(client: LcuClient, kind: unknown, action: unknown, id: unknown) {
+  // The kind and the action go into the request path, so only the known words are allowed.
+  if (!Object.prototype.hasOwnProperty.call(SWAP_PATHS, kind as string)) throw new ActionRefused("pick a swap");
+  if (!SWAP_ACTIONS.includes(action as string)) throw new ActionRefused("pick a swap");
   if (!isSpellOrChamp(id)) throw new ActionRefused("pick a swap");
-  await client.post(`${SWAPS}/${id}/${action}`, {});
+  await client.post(`${SWAP_PATHS[kind as SwapKind]}/${id}/${action}`, {});
+  return { ok: true };
+}
+
+/** Leaves champion select (a dodge), with the client's usual penalty. Only in champ select. */
+export async function phoneDodge(client: LcuClient) {
+  await requirePhase(client, "ChampSelect", "you are not in champion select");
+  await client.post(DODGE, undefined);
   return { ok: true };
 }
 
@@ -412,7 +439,8 @@ const ROUTES: Record<string, Route> = {
   "GET /api/state": (d) => phoneState(d.client, d.fetch),
   "POST /api/choose": (d, b) => phoneChoose(d.client, b.championId, b.lock),
   "POST /api/spells": (d, b) => phoneSpells(d.client, b.spell1, b.spell2),
-  "POST /api/swap": (d, b) => phoneSwap(d.client, b.action, b.id),
+  "POST /api/swap": (d, b) => phoneSwap(d.client, b.kind ?? "champion", b.action, b.id),
+  "POST /api/dodge": (d) => phoneDodge(d.client),
   "POST /api/skin": (d, b) => phoneSkin(d.client, b.skinId),
   "POST /api/accept": (d) => phoneReadyCheck(d.client, "accept"),
   "POST /api/decline": (d) => phoneReadyCheck(d.client, "decline"),

@@ -112,6 +112,8 @@
   .swap-row { display: flex; align-items: center; justify-content: space-between; gap: 8px; min-height: 40px; padding: 0 10px; border: 1px solid var(--gold); border-radius: 6px; }
   .swap-text { min-width: 0; font-size: 13px; }
   .swap-buttons { display: flex; flex: none; gap: 6px; }
+  .dodge { width: 100%; margin-top: 12px; min-height: 36px; font-size: 13px; color: var(--muted); }
+  .dodge.armed { border-color: var(--red); color: var(--red); }
   .accept { min-height: 40px; padding: 0 14px; border-radius: 6px; background: var(--gold); color: var(--bg); font-weight: 600; }
   .msg { font-size: 13px; color: var(--gold); }
   .msg:empty { display: none; }
@@ -242,6 +244,8 @@
     <section class="col enemies">
       <h2>Enemy team</h2>
       <ul class="list" id="enemies"></ul>
+      <!-- Far from Lock In, at the end of the page, so it is not hit by mistake. -->
+      <button class="btn dodge" id="dodge" type="button">Dodge</button>
     </section>
   </main>
 
@@ -556,21 +560,28 @@
     if (p.locked) sub.append(el("span", "Locked", "tag locked"));
     else if (p.hovering) sub.append(el("span", "Hovering", "tag hovering"));
     if (p.mine) sub.append(el("span", "You", "tag"));
-    if (p.swap && p.swap.state === "AVAILABLE") {
-      const b = el("button", "Swap", "swap");
-      b.type = "button";
-      b.onclick = () => act("/api/swap", { action: "request", id: p.swap.id }, $("msg"), "Swap requested.");
-      sub.append(b);
-    } else if (p.swap && p.swap.state === "SENT") {
-      sub.append(el("span", "Swap asked", "tag hovering"));
-      const b = el("button", "Cancel", "swap");
-      b.type = "button";
-      b.onclick = () => act("/api/swap", { action: "cancel", id: p.swap.id }, $("msg"), "Swap request cancelled.");
-      sub.append(b);
-    }
+    swapButtons(sub, "champion", p.swap, "Swap champ", "Champion swap asked");
+    swapButtons(sub, "pick-order", p.orderSwap, "Swap order", "Pick order swap asked");
     who.append(sub);
     li.append(pic(champSrc(p), ""), who, spellPair(p.spells, spellList));
     return li;
+  }
+
+  // A swap you can ask a teammate for, or one you asked for and can cancel. The id is the client's swap id.
+  function swapButtons(box, kind, swap, label, asked) {
+    if (!swap) return;
+    if (swap.state === "AVAILABLE") {
+      const b = el("button", label, "swap");
+      b.type = "button";
+      b.onclick = () => act("/api/swap", { kind, action: "request", id: swap.id }, $("msg"), "Swap requested.");
+      box.append(b);
+    } else if (swap.state === "SENT") {
+      box.append(el("span", asked, "tag hovering"));
+      const b = el("button", "Cancel", "swap");
+      b.type = "button";
+      b.onclick = () => act("/api/swap", { kind, action: "cancel", id: swap.id }, $("msg"), "Swap request cancelled.");
+      box.append(b);
+    }
   }
 
   function enemyRow(e) {
@@ -643,13 +654,15 @@
       const row = el("div", undefined, "swap-row");
       const yes = el("button", "Accept", "accept");
       yes.type = "button";
-      yes.onclick = () => act("/api/swap", { action: "accept", id: x.id }, $("msg"), "Swap accepted.");
+      yes.onclick = () => act("/api/swap", { kind: x.kind, action: "accept", id: x.id }, $("msg"), "Swap accepted.");
       const no = el("button", "Decline", "swap");
       no.type = "button";
-      no.onclick = () => act("/api/swap", { action: "decline", id: x.id }, $("msg"), "Swap declined.");
+      no.onclick = () => act("/api/swap", { kind: x.kind, action: "decline", id: x.id }, $("msg"), "Swap declined.");
       const buttons = el("span", undefined, "swap-buttons");
       buttons.append(no, yes);
-      row.append(el("span", (x.name ? "Swap for " + x.name + "?" : "A teammate wants to swap champions"), "swap-text"), buttons);
+      const who = x.name || x.position || "a teammate";
+      const text = x.kind === "pick-order" ? "Swap pick order with " + who + "?" : x.name ? "Swap for " + x.name + "?" : "Swap champions with a teammate?";
+      row.append(el("span", text, "swap-text"), buttons);
       return row;
     }));
   }
@@ -929,6 +942,23 @@
     leaveArmed = null;
     $("leave").textContent = "Leave lobby";
     act("/api/leave", {}, $("idle-msg"), "Left the lobby.");
+  };
+  // Dodging takes two taps and says what it costs, so one stray tap does not leave the game.
+  let dodgeArmed = null;
+  const DODGE_TEXT = "Dodge";
+  $("dodge").onclick = () => {
+    const b = $("dodge");
+    if (!dodgeArmed) {
+      b.textContent = "Tap again to dodge (LP loss and a queue wait)";
+      b.classList.add("armed");
+      dodgeArmed = setTimeout(() => { dodgeArmed = null; b.textContent = DODGE_TEXT; b.classList.remove("armed"); }, 4000);
+      return;
+    }
+    clearTimeout(dodgeArmed);
+    dodgeArmed = null;
+    b.textContent = DODGE_TEXT;
+    b.classList.remove("armed");
+    act("/api/dodge", {}, $("msg"), "Left champion select.");
   };
   $("spell1").onclick = () => openSpells("spell1");
   $("spell2").onclick = () => openSpells("spell2");
