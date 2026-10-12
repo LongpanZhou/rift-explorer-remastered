@@ -54,7 +54,7 @@ export default function PhonePanel() {
       <p className="muted">
         Scan the code with your phone to see champ select, pick, lock and set spells, accept matches, queue up, switch mode or leave the lobby. Your phone must be on the same
         Wi-Fi as this computer, and this app must stay open. Nothing goes through the internet. Auto champ select turns off
-        while this tab is open. On Windows, allow lcu-sidecar through the firewall when asked.
+        while this tab is open. The first time on Windows, a firewall prompt for lcu-sidecar may open behind this window: click Allow, then reload the page on your phone.
       </p>
       <button disabled={busy} onClick={link ? stop : start}>
         {busy && !link ? "Starting…" : link ? "Stop phone champ select" : "Phone champ select"}

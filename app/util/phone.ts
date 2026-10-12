@@ -180,8 +180,11 @@ export async function phoneState(client: LcuClient, fetchFn?: Fetcher) {
       mine: champs(session.bans?.myTeamBans),
       theirs: champs(session.bans?.theirTeamBans),
     },
+    // The client can leave an enemy's championId at 0 after they lock in; their completed
+    // pick action always carries the champion, so it is read first.
     enemies: (session.theirTeam ?? []).map((p: any) => {
-      const championId: number = p.championId || 0;
+      const pick = actions.find((a) => a.actorCellId === p.cellId && a.type === "pick" && a.completed && a.championId);
+      const championId: number = pick?.championId || p.championId || 0;
       return { cellId: p.cellId as number, championId, ...named(championId) };
     }),
     spells: selection ? { spell1: selection.spell1Id, spell2: selection.spell2Id } : null,

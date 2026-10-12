@@ -59,8 +59,9 @@ fn sidecar_path(_app: &tauri::AppHandle) -> Result<std::path::PathBuf, SidecarEr
 }
 
 /// On Windows the sidecar is built into this executable. It is written to the app's
-/// cache folder on first use, under a name that carries the app version, so an update
-/// never runs an old copy and never overwrites one that is still running.
+/// cache folder on first use, always under the same name: Windows Firewall remembers the
+/// user's "Allow" for that path, so the phone page keeps working after an update. A stamp
+/// file records which app version wrote it, so an update replaces the old copy.
 #[cfg(windows)]
 const SIDECAR_EXE: &[u8] = include_bytes!("../binaries/lcu-sidecar-x86_64-pc-windows-msvc.exe");
 
@@ -73,13 +74,18 @@ fn sidecar_path(app: &tauri::AppHandle) -> Result<std::path::PathBuf, SidecarErr
         .map_err(|e| unavailable(format!("no cache folder: {e}")))?;
     std::fs::create_dir_all(&dir)
         .map_err(|e| unavailable(format!("could not create {}: {e}", dir.display())))?;
-    let exe = dir.join(format!("lcu-sidecar-{}.exe", env!("CARGO_PKG_VERSION")));
-    if std::fs::metadata(&exe).map(|m| m.len()).ok() != Some(SIDECAR_EXE.len() as u64) {
+    let exe = dir.join("lcu-sidecar.exe");
+    let stamp = dir.join("lcu-sidecar.version");
+    let want = format!("{} {}", env!("CARGO_PKG_VERSION"), SIDECAR_EXE.len());
+    let current = std::fs::read_to_string(&stamp).ok() == Some(want.clone())
+        && std::fs::metadata(&exe).map(|m| m.len()).ok() == Some(SIDECAR_EXE.len() as u64);
+    if !current {
         // Write to a temporary name first, so a half-written file is never run.
-        let tmp = exe.with_extension("tmp");
+        let tmp = dir.join("lcu-sidecar.tmp");
         std::fs::write(&tmp, SIDECAR_EXE)
             .and_then(|_| std::fs::rename(&tmp, &exe))
-            .map_err(|e| unavailable(format!("could not write the sidecar: {e}")))?;
+            .and_then(|_| std::fs::write(&stamp, &want))
+            .map_err(|e| unavailable(format!("could not write the sidecar (is an old copy still running?): {e}")))?;
     }
     Ok(exe)
 }

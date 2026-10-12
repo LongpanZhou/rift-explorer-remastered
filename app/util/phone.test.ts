@@ -117,8 +117,10 @@ test("state shows names, your turn and options; outside champ select it says so"
 
 test("state includes the team, bans, enemies, spell list, runes and swaps", async () => {
   const annieLocked = { id: 8, actorCellId: 3, type: "pick", isInProgress: false, completed: true, championId: 1 };
+  // The enemy in cell 7 locked Olaf, but the client still reports championId 0 for them.
+  const enemyLocked = { id: 9, actorCellId: 7, type: "pick", isInProgress: false, completed: true, championId: 2 };
   const { client } = fakeClient(
-    world([[turnPick], [annieLocked]], {
+    world([[turnPick], [annieLocked, enemyLocked]], {
       myTeam: [
         team[0],
         { cellId: 3, championId: 1, championPickIntent: 0, assignedPosition: "jungle" },
@@ -136,7 +138,7 @@ test("state includes the team, bans, enemies, spell list, runes and swaps", asyn
   expect(state.bans).toEqual({ mine: [{ id: 2, name: "Olaf", alias: "Olaf" }], theirs: [{ id: 9, name: "Ahri", alias: "Ahri" }] });
   expect(state.enemies).toEqual([
     { cellId: 6, championId: 9, name: "Ahri", alias: "Ahri" },
-    { cellId: 7, championId: 0, name: "", alias: "" },
+    { cellId: 7, championId: 2, name: "Olaf", alias: "Olaf" },
   ]);
   expect(state.spellList).toEqual([
     { id: 4, name: "Flash", file: "SummonerFlash.png", disallowed: false },

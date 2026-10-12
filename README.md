@@ -103,7 +103,8 @@ spells, a searchable champion grid, and a Lock In button.
 
 > [!IMPORTANT]
 > Your phone must be on the **same Wi-Fi** as your computer, and the app must stay open.
-> On Windows, allow `lcu-sidecar` through the firewall (private networks) the first time you start it.
+> The first time on Windows, a firewall prompt for `lcu-sidecar` may open behind the app window:
+> click **Allow** (private networks), then reload the page on your phone.
 > The page is served from your computer on port `8787`. Nothing goes through the internet.
 > Auto champ select turns off while the Phone tab is open.
 
@@ -166,7 +167,8 @@ bun run tauri build    # build a release bundle
 
 The app reads the client's lockfile to find its local API, and a compiled Bun sidecar does
 all the talking to the client. On Windows the sidecar is bundled inside the single `.exe` and
-unpacked to the app's cache folder the first time it runs.
+unpacked to the app's cache folder the first time it runs, always under the same name, so the
+firewall permission carries over to updates.
 
 ### Releasing
 
