@@ -305,6 +305,8 @@
   const LOST = "Connection lost. Retrying...";
   const SAFE = /^[A-Za-z0-9_-][A-Za-z0-9._-]{0,63}$/;
   const PHASE = { ban: "Ban", pick: "Pick" };
+  // The client's own champ select phases, when no pick or ban is running.
+  const STAGE = { PLANNING: "Declare your pick", FINALIZATION: "Final phase", GAME_STARTING: "Game starting" };
   // Outside champ select: the header, by client phase.
   const LOBBY = { None: "Not in a lobby", Lobby: "In a lobby", Matchmaking: "In queue", ReadyCheck: "Match found" };
   const IDLE_TEXT = {
@@ -495,7 +497,9 @@
   function render() {
     const s = state;
     const live = s.inChampSelect;
-    $("phase").textContent = live ? PHASE[s.timer.phase] || "Waiting" : LOBBY[s.phase] || "Not in champion select";
+    $("phase").textContent = live
+      ? PHASE[s.timer.phase] || STAGE[s.timer.stage] || "Waiting"
+      : LOBBY[s.phase] || "Not in champion select";
     $("clock").hidden = !live;
     $("idle").hidden = live;
     for (const id of ["bans", "zones", "dock", "skins"]) $(id).hidden = !live;
@@ -552,10 +556,16 @@
     if (p.locked) sub.append(el("span", "Locked", "tag locked"));
     else if (p.hovering) sub.append(el("span", "Hovering", "tag hovering"));
     if (p.mine) sub.append(el("span", "You", "tag"));
-    if (p.swappable && !p.mine) {
+    if (p.swap && p.swap.state === "AVAILABLE") {
       const b = el("button", "Swap", "swap");
       b.type = "button";
-      b.onclick = () => act("/api/swap", { action: "request", id: p.cellId }, $("msg"), "Swap requested.");
+      b.onclick = () => act("/api/swap", { action: "request", id: p.swap.id }, $("msg"), "Swap requested.");
+      sub.append(b);
+    } else if (p.swap && p.swap.state === "SENT") {
+      sub.append(el("span", "Swap asked", "tag hovering"));
+      const b = el("button", "Cancel", "swap");
+      b.type = "button";
+      b.onclick = () => act("/api/swap", { action: "cancel", id: p.swap.id }, $("msg"), "Swap request cancelled.");
       sub.append(b);
     }
     who.append(sub);
@@ -590,7 +600,8 @@
     const hint = $("hint");
     hint.textContent = turn
       ? (turn.type === "ban" ? "Your turn: tap a champion to ban, then Lock In" : "Your turn: tap a champion to hover it, then Lock In")
-      : plan ? "Tap a champion to pre-pick it. Your team sees it; lock in on your turn." : "Waiting for your turn";
+      : plan ? "Tap a champion to pre-pick it. Your team sees it; lock in on your turn."
+      : s.hasPicks ? "Waiting for your turn" : "No pick to make here in this mode.";
     hint.classList.toggle("turn", !!turn);
 
     const q = fold($("search").value);

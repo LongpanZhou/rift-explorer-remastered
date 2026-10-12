@@ -23,6 +23,8 @@ function champSelect() {
     otherTurn: { id: 5, actorCellId: 3, type: "ban", isInProgress: true, completed: false, championId: 0 } as any,
     enemyPicks: [] as any[],
     swaps: [] as any[],
+    bans: [] as number[],
+    stage: "BAN_PICK",
     /** When set, the next game-phase request is never answered (a phone that slept mid-request). */
     hangNext: false,
     writes: [] as { method: string; path: string; body: unknown }[],
@@ -48,8 +50,8 @@ function champSelect() {
           })),
           // The client can leave an enemy's championId at 0 after they lock in.
           theirTeam: [{ cellId: 7, championId: 0 }, { cellId: 8, championId: 0 }],
-          bans: { myTeamBans: [], theirTeamBans: [] },
-          timer: { adjustedTimeLeftInPhase: 25000 },
+          bans: { myTeamBans: sim.bans, theirTeamBans: [] },
+          timer: { adjustedTimeLeftInPhase: 25000, phase: sim.stage },
         };
       if (p === "/lol-game-data/assets/v1/champion-summary.json") return NAMES;
       if (p === "/lol-champ-select/v1/pickable-champion-ids") return NAMES.map((c) => c.id);
@@ -117,7 +119,8 @@ async function openPage(client: LcuClient) {
 
 test("before your turn the champions are listed, and search ignores case, accents and marks", async () => {
   const page = await openPage(champSelect().client);
-  expect(page.texts("#tiles .tname")).toEqual(["Annie", "Olaf", "Galio", "Aurelion Sol", "Kai'Sa"]);
+  // Galio is left out: a teammate is hovering it.
+  expect(page.texts("#tiles .tname")).toEqual(["Annie", "Olaf", "Aurelion Sol", "Kai'Sa"]);
   expect(page.$("hint").textContent).toContain("pre-pick");
 
   const search = (q: string) => {
@@ -130,7 +133,7 @@ test("before your turn the champions are listed, and search ignores case, accent
   expect(search("aurelionsol")).toEqual(["Aurelion Sol"]);
   expect(search("xyz")).toEqual([]);
   expect(page.$("tiles").textContent).toBe("No champion matches.");
-  expect(search("")).toHaveLength(5);
+  expect(search("")).toHaveLength(4);
 });
 
 test("search keeps its filter when the page updates", async () => {
@@ -154,14 +157,13 @@ test("tapping a champion before your turn pre-picks it on your coming pick; Lock
   expect(page.texts("#team .row.mine .nm")).toEqual(["Kai'Sa"]);
 });
 
-test("a teammate's champion cannot be pre-picked", async () => {
+test("a teammate's or banned champion is not offered", async () => {
   const { sim, client } = champSelect();
+  sim.bans = [1]; // Annie banned; cell 4 is hovering Galio
   const page = await openPage(client);
-  page.type("galio"); // cell 4 is hovering Galio
-  page.$("tiles").querySelector(".tile").click();
-  await page.until(() => page.$("msg").textContent !== "");
-  expect(page.$("msg").textContent).toBe("a teammate has that champion");
-  expect(sim.writes).toEqual([]);
+  expect(page.texts("#tiles .tname")).toEqual(["Olaf", "Aurelion Sol", "Kai'Sa"]);
+  page.type("galio");
+  expect(page.$("tiles").textContent).toBe("No champion matches.");
 });
 
 test("on your turn a tap hovers, and Lock In locks the hovered champion", async () => {
@@ -195,6 +197,36 @@ test("of four swap entries the client lists, only the request sent to you pops u
   page.$("swap-items").querySelector(".accept").click();
   await page.until(() => sim.writes.length === 1);
   expect(sim.writes[0]).toEqual({ method: "POST", path: "/lol-champ-select/v1/session/champion-swaps/22/accept", body: {} });
+});
+
+test("asking a teammate for a swap uses the client's swap id, and a sent request can be cancelled", async () => {
+  const { sim, client } = champSelect();
+  sim.swaps = [{ id: 21, cellId: 3, state: "AVAILABLE" }];
+  const page = await openPage(client);
+  await page.until(() => page.$("team").querySelector("button.swap") !== null);
+  page.$("team").querySelector("button.swap").click();
+  await page.until(() => sim.writes.length === 1);
+  // Swap 21 with the teammate in cell 3: the request goes to the swap's id.
+  expect(sim.writes[0]).toEqual({ method: "POST", path: "/lol-champ-select/v1/session/champion-swaps/21/request", body: {} });
+
+  sim.swaps = [{ id: 21, cellId: 3, state: "SENT" }];
+  await page.until(() => page.texts("#team .tag").includes("Swap asked"), 3000);
+  const cancel = page.$("team").querySelector("button.swap");
+  expect(cancel.textContent).toBe("Cancel");
+  cancel.click();
+  await page.until(() => sim.writes.length === 2);
+  expect(sim.writes[1].path).toBe("/lol-champ-select/v1/session/champion-swaps/21/cancel");
+});
+
+test("the header names the client's phase between turns", async () => {
+  const { sim, client } = champSelect();
+  sim.otherTurn = null;
+  sim.stage = "PLANNING";
+  const page = await openPage(client);
+  expect(page.$("phase").textContent).toBe("Declare your pick");
+  sim.stage = "FINALIZATION";
+  sim.myPick = { ...sim.myPick, completed: true, championId: 2 };
+  await page.until(() => page.$("phase").textContent === "Final phase", 3000);
 });
 
 test("a swap request can be declined, and the pop-up goes when the request does", async () => {
