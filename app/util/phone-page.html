@@ -365,18 +365,26 @@
     return box;
   }
 
+  // A request that gets no answer (the phone slept, Wi-Fi dropped) is given up after 4 s,
+  // so it can never hold up the updates.
   async function api(path, body) {
-    let res;
+    const stop = new AbortController();
+    const timer = setTimeout(() => stop.abort(), 4000);
+    let res, data;
     try {
       res = await fetch(path, {
         method: body ? "POST" : "GET",
         headers: { "content-type": "application/json" },
         body: body ? JSON.stringify(body) : undefined,
+        cache: "no-store",
+        signal: stop.signal,
       });
+      data = await res.json().catch(() => ({}));
     } catch {
       throw new Error(LOST);
+    } finally {
+      clearTimeout(timer);
     }
-    const data = await res.json().catch(() => ({}));
     if (!res.ok) throw new Error(data.error || "Request failed (" + res.status + ")");
     return data;
   }
@@ -405,12 +413,29 @@
     next.clockAt = Date.now();
     state = next;
     if ($("msg").textContent === LOST) say($("msg"), "");
-    render();
+    try {
+      render();
+    } catch (err) {
+      console.error(err);
+    }
   }
+  // Reads the state every 2 s. Nothing that goes wrong in one round stops the next one.
+  let polling = false;
   async function poll() {
-    await refresh();
-    setTimeout(poll, 2000);
+    if (polling) return;
+    polling = true;
+    try {
+      await refresh();
+    } finally {
+      polling = false;
+    }
   }
+  function pollLoop() {
+    poll().finally(() => setTimeout(pollLoop, 2000));
+  }
+  // Phones pause pages in the background; update at once when the page is shown again.
+  document.addEventListener("visibilitychange", () => { if (!document.hidden) poll(); });
+  window.addEventListener("pageshow", () => poll());
 
   function tickClock() {
     const t = state && state.inChampSelect ? state.timer : null;
@@ -892,7 +917,7 @@
   }
 
   setInterval(() => { tickClock(); tickIdle(); }, 250);
-  poll();
+  pollLoop();
 })();
 </script>
 </body>

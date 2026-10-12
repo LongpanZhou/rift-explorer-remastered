@@ -23,7 +23,8 @@ export interface PhoneDeps {
   fetch?: Fetcher;
 }
 
-const JSON_HEADERS = { "content-type": "application/json" };
+// The state changes every second in champ select: no browser may keep an old copy.
+const JSON_HEADERS = { "content-type": "application/json", "cache-control": "no-store" };
 const reply = (body: unknown, status = 200) => new Response(JSON.stringify(body), { status, headers: JSON_HEADERS });
 
 const isSpellOrChamp = (n: unknown): n is number => Number.isInteger(n) && (n as number) > 0;
