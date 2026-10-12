@@ -11,7 +11,7 @@ Customize your profile, claim rewards, manage loot and rune pages, and run champ
 [![Latest release](https://img.shields.io/github/v/release/LongpanZhou/rift-explorer-remastered?style=flat-square&color=c89b3c)](https://github.com/LongpanZhou/rift-explorer-remastered/releases/latest)
 [![Downloads](https://img.shields.io/github/downloads/LongpanZhou/rift-explorer-remastered/total?style=flat-square&color=0ac8b9)](https://github.com/LongpanZhou/rift-explorer-remastered/releases)
 [![CI](https://img.shields.io/github/actions/workflow/status/LongpanZhou/rift-explorer-remastered/ci.yml?branch=main&style=flat-square&label=CI)](https://github.com/LongpanZhou/rift-explorer-remastered/actions/workflows/ci.yml)
-![Platforms](https://img.shields.io/badge/platform-macOS%20%7C%20Windows-1e2328?style=flat-square)
+![Platforms](https://img.shields.io/badge/platform-macOS%20%7C%20Windows%20%7C%20Linux-1e2328?style=flat-square)
 
 ![Tauri](https://img.shields.io/badge/Tauri-2-24C8DB?style=flat-square&logo=tauri&logoColor=white)
 ![React](https://img.shields.io/badge/React-18-61DAFB?style=flat-square&logo=react&logoColor=black)
@@ -103,6 +103,7 @@ spells, a searchable champion grid, and a Lock In button.
 
 > [!IMPORTANT]
 > Your phone must be on the **same Wi-Fi** as your computer, and the app must stay open.
+> On Windows, allow `lcu-sidecar` through the firewall (private networks) the first time you start it.
 > The page is served from your computer on port `8787`. Nothing goes through the internet.
 > Auto champ select turns off while the Phone tab is open.
 
@@ -112,20 +113,22 @@ Grab the latest build for your platform from the [**Releases**](https://github.c
 
 | Platform | File | How to run |
 | --- | --- | --- |
-| 🍎 macOS (Apple Silicon) | `Rift-Explorer-Remastered-<version>-macos-arm64.dmg` | Open the `.dmg` and drag the app to Applications |
+| 🍎 macOS (Apple Silicon) | `Rift-Explorer-Remastered-<version>-macos-arm64.zip` | Unzip it and double-click the app (optionally move it to Applications first) |
+| 🍎 macOS (Intel) | `Rift-Explorer-Remastered-<version>-macos-x64.zip` | Unzip it and double-click the app (optionally move it to Applications first) |
 | 🪟 Windows (x64) | `Rift-Explorer-Remastered-<version>-windows-x64.exe` | One portable file, no installer. Just run it |
 | 🐧 Linux (x86_64) | `Rift-Explorer-Remastered-<version>-linux-x86_64.AppImage` | `chmod +x` it, then run it |
 
 > [!WARNING]
-> Builds are **unsigned**, so macOS Gatekeeper or Windows SmartScreen may ask you to confirm
-> before the app opens. On macOS, right-click the app and choose **Open**. On Windows, click
-> **More info → Run anyway**.
+> Builds are **not notarized**, so macOS Gatekeeper or Windows SmartScreen may ask you to confirm
+> before the app opens the first time. On macOS, if the app is blocked, open **System Settings →
+> Privacy & Security** and click **Open Anyway** (or run `xattr -cr "/path/to/Rift Explorer Remastered.app"`).
+> On Windows, click **More info → Run anyway**.
 
 ### Requirements
 
 - The League of Legends client, **running and logged in**
-- macOS or Windows. The League client does not run on Linux, so the Linux build can start
-  but has no client to connect to.
+- macOS (Apple Silicon or Intel) or Windows. On Linux the app looks for a client installed
+  with Lutris's default Wine prefix (`~/Games/league-of-legends`).
 
 ## 🔨 Build from source
 
@@ -162,12 +165,13 @@ bun run tauri build    # build a release bundle
 ```
 
 The app reads the client's lockfile to find its local API, and a compiled Bun sidecar does
-all the talking to the client. On Windows the sidecar is bundled inside the single `.exe`.
+all the talking to the client. On Windows the sidecar is bundled inside the single `.exe` and
+unpacked to the app's cache folder the first time it runs.
 
 ### Releasing
 
 Pushing a `v*` tag runs the [release workflow](.github/workflows/release.yml), which builds
-macOS, Windows and Linux files and attaches them to the GitHub release.
+macOS (Apple Silicon and Intel), Windows and Linux files and attaches them to the GitHub release.
 
 ## 🔒 Privacy
 
@@ -198,7 +202,8 @@ and check Riot's rules first.
 <summary><b>The phone page won't load.</b></summary>
 
 Make sure your phone and computer are on the same Wi-Fi network, the app is still open, and
-your firewall allows incoming connections on port `8787`. Some guest or public networks block
+your firewall allows incoming connections on port `8787` (on Windows, allow `lcu-sidecar` on
+private networks, and set your Wi-Fi to a private network). Some guest or public networks block
 devices from reaching each other.
 </details>
 

@@ -121,7 +121,13 @@ async function main(): Promise<void> {
   const lock: LockFile = await parse(lockfilePath).catch((err: any) => fail(EXIT.LOCKFILE_MALFORMED, err.message));
   // "serve <port>" runs the phone page until the app stops it.
   if (positional[0] === "serve") {
-    await servePhone(lock, Number(positional[1]));
+    const port = Number(positional[1]);
+    try {
+      await servePhone(lock, port);
+    } catch (err: any) {
+      const busy = err?.code === "EADDRINUSE" || /in use/i.test(String(err?.message));
+      fail(EXIT.REQUEST_FAILED, busy ? `port ${port} is already in use. Close the other program using it, or restart the app.` : String(err?.message ?? err));
+    }
     return;
   }
 

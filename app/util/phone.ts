@@ -1,12 +1,15 @@
 /**
- * The phone champ select page. It runs on the Mac, on the local network only: a phone on
+ * The phone champ select page. It runs on this computer, on the local network only: a phone on
  * the same Wi-Fi can open it, and nothing goes through the internet.
  */
 import { ActionRefused, awaitingAnswer, lcuClient, openAction, PAGES, takenBy, type LcuClient } from "./player";
 import type { LockFile } from "./LockFileParser";
-import PHONE_PAGE from "./phone-page.html" with { type: "text" };
+import PHONE_HTML from "./phone-page.html" with { type: "text" };
 import { championIcon, skinArt, spellIcon, summonerSpells, type Fetcher } from "./phoneIcons";
 import { runeData, runeIcon, saveRunePage } from "./phoneRunes";
+
+/** The page's text. Bun's own types read an .html import as a bundle; `type: "text"` makes it a string. */
+const PHONE_PAGE = PHONE_HTML as unknown as string;
 
 const GAMEFLOW = "/lol-gameflow/v1/gameflow-phase";
 const READY_CHECK = "/lol-matchmaking/v1/ready-check";
@@ -396,7 +399,10 @@ export async function handlePhone(req: Request, deps: PhoneDeps): Promise<Respon
   }
 }
 
-/** Runs the phone server on the local network until the process is stopped. */
+/**
+ * Runs the phone server on the local network until the process is stopped. The app waits
+ * for the `phone page on port` line on stderr before it shows the QR code.
+ */
 export function servePhone(lock: LockFile, port: number): Promise<never> {
   Bun.serve({
     hostname: "0.0.0.0",

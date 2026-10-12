@@ -1,5 +1,5 @@
 import { beforeEach, expect, test } from "bun:test";
-import { ActionRefused } from "./player";
+import { ActionRefused, type LcuClient } from "./player";
 import { handlePhone, phoneCancelQueue, phoneChoose, phoneLeaveLobby, phoneMode, phoneQueue, phoneReadyCheck, phoneSkin, phoneSpells, phoneState, resetModeCache, type PhoneDeps } from "./phone";
 import { resetIconCache } from "./phoneIcons";
 import { resetRuneIconCache } from "./phoneRunes";

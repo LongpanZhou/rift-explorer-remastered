@@ -2,7 +2,7 @@ import path from "path";
 import { EventEmitter } from "events";
 import { exec } from "child_process";
 import { normalize, join } from "path";
-import { readFileSync } from "fs-extra";
+import { existsSync, readFileSync } from "fs-extra";
 import { FSWatcher, watch } from "chokidar";
 import { parseDocument } from "yaml";
 import { platform } from "os";
@@ -52,12 +52,12 @@ export default class RiotConnector extends EventEmitter {
 
   _checkRiotClient() {
     if (platform() === "linux") {
-      this._lockfileCreated(
-        join(
-          homedir(),
-          "./Games/league-of-legends/drive_c/Riot Games/League of Legends/lockfile"
-        )
-      );
+      // The client runs under Wine (Lutris's default prefix); there is no process to read.
+      const leaguePath = join(homedir(), "./Games/league-of-legends/drive_c/Riot Games/League of Legends");
+      if (!existsSync(join(leaguePath, "lockfile"))) return;
+      this.leaguePath = leaguePath;
+      this.emit("riotclient", leaguePath);
+      this._lockfileCreated(join(leaguePath, "lockfile"));
       return;
     }
     /**
@@ -214,7 +214,7 @@ export default class RiotConnector extends EventEmitter {
       console.error(
         "Lockfile information sent; clearing riotclient check interval"
       );
-    });
+    }, (err) => console.error(`lockfile not readable: ${err}`));
   }
 
   /**

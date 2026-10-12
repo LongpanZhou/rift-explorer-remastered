@@ -244,6 +244,7 @@ test("claim all takes every forced reward, skips choices and keeps going on fail
       posts.push(path);
       if (path.includes("/c/")) throw { response: { data: { message: "boom" } } };
     },
+    delete: async () => {},
     getBytes: async () => new Uint8Array(),
   };
   expect(await claimAllRewards(client)).toEqual({

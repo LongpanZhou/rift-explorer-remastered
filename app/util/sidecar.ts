@@ -1,4 +1,5 @@
 import { existsSync } from "fs";
+import { homedir } from "os";
 import { join } from "path";
 import { EXIT } from "./exitCodes";
 import { ActionRefused } from "./player";
@@ -13,7 +14,9 @@ const DISCOVERY_TIMEOUT_MS = 8000;
 const DEFAULT_LOCKFILES =
   process.platform === "win32"
     ? ["C:\\Riot Games\\League of Legends\\lockfile"]
-    : ["/Applications/League of Legends.app/Contents/LoL/lockfile"];
+    : process.platform === "linux"
+      ? [join(homedir(), "Games/league-of-legends/drive_c/Riot Games/League of Legends/lockfile")]
+      : ["/Applications/League of Legends.app/Contents/LoL/lockfile"];
 
 /**
  * Maps any sidecar error to an exit code and a message for the user. This is
