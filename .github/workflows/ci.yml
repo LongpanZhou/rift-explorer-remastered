@@ -1,6 +1,7 @@
 name: ci
 
-# Runs the sidecar tests and builds the app on macOS and Windows (D6).
+# Runs the sidecar tests and builds the app on macOS (Apple Silicon and Intel), Windows
+# and Linux (D6).
 # The release live check (scripts/live_check.ts) needs a logged-in League
 # client and is not run in CI.
 
@@ -10,22 +11,41 @@ on:
 
 jobs:
   macos:
+    # Both Macs build on Apple Silicon; the Intel app is cross-compiled.
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: aarch64-apple-darwin
+            bun_target: bun-darwin-arm64
+            arch: arm64
+          - target: x86_64-apple-darwin
+            bun_target: bun-darwin-x64-baseline
+            arch: x86_64
     runs-on: macos-14
     steps:
       - uses: actions/checkout@v4
       - uses: oven-sh/setup-bun@v2
       - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
       - run: bun install --frozen-lockfile
       - name: Sidecar tests (golden snapshot, unit, CLI exit codes)
         run: bun test
-      - name: Build the sidecar for Apple Silicon
-        run: bun build --compile app/util/sidecar-main.ts --outfile src-tauri/binaries/lcu-sidecar-aarch64-apple-darwin
-      - name: Build the app (unsigned)
-        run: bun run tauri build
+      - name: Build the sidecar
+        run: bun build --compile --target=${{ matrix.bun_target }} app/util/sidecar-main.ts --outfile src-tauri/binaries/lcu-sidecar-${{ matrix.target }}
+      - name: Build the app (ad hoc signed)
+        run: bun run tauri build --target ${{ matrix.target }} --bundles app
+      - name: Check the app is signed and built for ${{ matrix.arch }}
+        run: |
+          APP="src-tauri/target/${{ matrix.target }}/release/bundle/macos/Rift Explorer Remastered.app"
+          codesign --verify --deep --strict "$APP"
+          lipo -archs "$APP/Contents/MacOS/rift-explorer-tauri" | grep -qx ${{ matrix.arch }}
+          lipo -archs "$APP/Contents/MacOS/lcu-sidecar" | grep -qx ${{ matrix.arch }}
       - uses: actions/upload-artifact@v4
         with:
-          name: rift-explorer-macos
-          path: src-tauri/target/release/bundle/
+          name: rift-explorer-macos-${{ matrix.arch }}
+          path: src-tauri/target/${{ matrix.target }}/release/bundle/macos/
 
   windows:
     runs-on: windows-latest
@@ -73,3 +93,5 @@ jobs:
         run: bun build --compile app/util/sidecar-main.ts --outfile src-tauri/binaries/lcu-sidecar-x86_64-unknown-linux-gnu
       - name: Build the app (no installer)
         run: bun run tauri build --no-bundle
+      - name: App tests (phone page start, busy port, missing lockfile)
+        run: cargo test --manifest-path src-tauri/Cargo.toml
