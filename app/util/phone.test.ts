@@ -142,9 +142,8 @@ test("state includes the team, bans, enemies, spell list, runes and swaps", asyn
   const state: any = await phoneState(client, ddragon().fetch);
   expect(state.team).toEqual([
     { cellId: 2, mine: true, championId: 0, name: "", alias: "", position: "MID", spells: { spell1: 4, spell2: 14 }, locked: false, hovering: false, swap: null, orderSwap: null },
-    // Swap requests go to the client's swap id (31), not the teammate's cell (3).
-    { cellId: 3, mine: false, championId: 1, name: "Annie", alias: "Annie", position: "JGL", spells: null, locked: true, hovering: false, swap: { id: 31, state: "AVAILABLE" }, orderSwap: null },
-    // Cell 4 sent you a request: answered from the pop-up, not with a Swap button.
+    // You have not locked in yet, so no champion swap is offered, whatever the client lists.
+    { cellId: 3, mine: false, championId: 1, name: "Annie", alias: "Annie", position: "JGL", spells: null, locked: true, hovering: false, swap: null, orderSwap: null },
     { cellId: 4, mine: false, championId: 3, name: "Galio", alias: "Galio", position: "SUP", spells: null, locked: false, hovering: true, swap: null, orderSwap: null },
   ]);
   expect(state.bans).toEqual({ mine: [{ id: 2, name: "Olaf", alias: "Olaf" }], theirs: [{ id: 9, name: "Ahri", alias: "Ahri" }] });
@@ -157,7 +156,35 @@ test("state includes the team, bans, enemies, spell list, runes and swaps", asyn
     { id: 14, name: "Ignite", file: "SummonerDot.png", disallowed: true },
   ]);
   expect(state.runes).toEqual({ current: { id: 12, name: "Fixed" } });
-  expect(state.swaps).toEqual([{ kind: "champion", id: 32, cellId: 4, name: "Galio", alias: "Galio", position: "SUP" }]);
+  // Cell 4's champion swap request waits until both of you have locked in.
+  expect(state.swaps).toEqual([]);
+});
+
+test("swaps follow the game's rules: pick order only before either of you picks, champions only after both lock in", async () => {
+  const lists = {
+    [SWAPS]: [{ id: 31, cellId: 3, state: "AVAILABLE" }],
+    [ORDER_SWAPS]: [{ id: 41, cellId: 3, state: "AVAILABLE" }],
+  };
+  const swapsFor = async (actions: any[]) => {
+    const state: any = await phoneState(fakeClient({ ...world([actions]), ...lists }).client, ddragon().fetch);
+    return { swap: state.team[1].swap, orderSwap: state.team[1].orderSwap };
+  };
+  const mine = (completed: boolean) => ({ id: 7, actorCellId: 2, type: "pick", isInProgress: !completed, completed, championId: completed ? 2 : 0 });
+  const theirs = (completed: boolean) => ({ id: 8, actorCellId: 3, type: "pick", isInProgress: false, completed, championId: completed ? 1 : 0 });
+  // Neither picked: only pick order.
+  expect(await swapsFor([mine(false), theirs(false)])).toEqual({ swap: null, orderSwap: { id: 41, state: "AVAILABLE" } });
+  // You already picked: no pick order swap any more (the reported bug), and no champion swap until they lock too.
+  expect(await swapsFor([mine(true), theirs(false)])).toEqual({ swap: null, orderSwap: null });
+  // They picked, you did not: neither.
+  expect(await swapsFor([mine(false), theirs(true)])).toEqual({ swap: null, orderSwap: null });
+  // Both locked in: only champions.
+  expect(await swapsFor([mine(true), theirs(true)])).toEqual({ swap: { id: 31, state: "AVAILABLE" }, orderSwap: null });
+});
+
+test("a pick order request that came in before you locked in no longer pops up after", async () => {
+  const lists = { [ORDER_SWAPS]: [{ id: 41, cellId: 3, state: "RECEIVED" }] };
+  const state: any = await phoneState(fakeClient({ ...world([bothLocked]), ...lists }).client, ddragon().fetch);
+  expect(state.swaps).toEqual([]);
 });
 
 // Your pick has not started: someone else is banning or picking.
@@ -171,6 +198,31 @@ test("before your turn, the state offers the pickable champions to pre-pick", as
   expect(state.plan).toEqual({ championId: 2 });
   // Galio (3) is a teammate's pick intent.
   expect(state.options.map((o: any) => o.id)).toEqual([1, 2]);
+});
+
+test("the client's placeholder champion (-1, None) is never offered", async () => {
+  const { client } = fakeClient({ ...world([[turnPick]]), [PICKABLE]: [-1, 1, 2] });
+  const state: any = await phoneState(client, ddragon().fetch);
+  expect(state.options.map((o: any) => o.id)).toEqual([1, 2]);
+  await expect(phoneChoose(client, -1, false)).rejects.toBeInstanceOf(ActionRefused);
+});
+
+test("when the pickable list holds only the placeholder, the client's champion grid is offered", async () => {
+  const GRID = "/lol-champ-select/v1/all-grid-champions";
+  const grid = [
+    { id: -1, name: "None", owned: true },
+    { id: 1, name: "Annie", owned: true },
+    { id: 2, name: "Olaf", owned: false, freeToPlay: true },
+    { id: 9, name: "Ahri", owned: false, freeToPlay: false },
+    { id: 136, name: "Aurelion Sol", owned: true, disabled: true },
+  ];
+  const { client, writes } = fakeClient({ ...world([[turnPick]]), [PICKABLE]: [-1], [GRID]: grid });
+  const state: any = await phoneState(client, ddragon().fetch);
+  // Owned or free, not disabled, not the placeholder.
+  expect(state.options.map((o: any) => o.id)).toEqual([1, 2]);
+  await phoneChoose(client, 2, false);
+  await expect(phoneChoose(client, 9, false)).rejects.toThrow("that champion is not available to you");
+  expect(writes).toEqual([{ method: "PATCH", path: ACTION, body: { championId: 2, completed: false } }]);
 });
 
 test("banned and locked champions are not offered", async () => {
@@ -190,8 +242,14 @@ test("on your turn, a pre-pick the client did not carry over is the hover, and L
   expect(writes).toEqual([{ method: "PATCH", path: ACTION, body: { championId: 2, completed: true } }]);
 });
 
+// You (cell 2) and the jungler (cell 3) have both locked in.
+const bothLocked = [
+  { id: 7, actorCellId: 2, type: "pick", isInProgress: false, completed: true, championId: 2 },
+  { id: 8, actorCellId: 3, type: "pick", isInProgress: false, completed: true, championId: 1 },
+];
+
 test("a swap you asked for shows as sent and can be cancelled", async () => {
-  const { client, writes } = fakeClient({ ...world([[turnPick]]), [SWAPS]: [{ id: 31, cellId: 3, state: "SENT" }] });
+  const { client, writes } = fakeClient({ ...world([bothLocked]), [SWAPS]: [{ id: 31, cellId: 3, state: "SENT" }] });
   const state: any = await phoneState(client, ddragon().fetch);
   expect(state.team[1].swap).toEqual({ id: 31, state: "SENT" });
   await phoneSwap(client, "champion", "cancel", 31);
@@ -349,17 +407,36 @@ test("a client that is not running is reported as such, not as a connection erro
   expect((await res.json()).error).toBe("League client not running");
 });
 
-test("switching rune pages sends the page back as current, and refuses one that is not editable or missing", async () => {
+test("switching rune pages uses the client's current-page call, for locked pages too, and refuses a missing page", async () => {
   const s = setup(world([[turnPick]]));
   const switched = await handlePhone(req("/api/rune", { body: { id: 11 } }), s.deps);
   expect(switched.status).toBe(200);
-  expect(s.writes[0]).toEqual({ method: "PUT", path: "/lol-perks/v1/pages/11", body: { ...PAGES_LIST[0], current: true } });
+  expect(s.writes[0]).toEqual({ method: "PUT", path: "/lol-perks/v1/currentpage", body: 11 });
 
-  const notEditable = await handlePhone(req("/api/rune", { body: { id: 12 } }), s.deps);
-  expect(notEditable.status).toBe(422);
+  // Page 12 is locked (not editable), but can still be the current page.
+  const locked = await handlePhone(req("/api/rune", { body: { id: 12 } }), s.deps);
+  expect(locked.status).toBe(200);
+  expect(s.writes[1]).toEqual({ method: "PUT", path: "/lol-perks/v1/currentpage", body: 12 });
+
   const missing = await handlePhone(req("/api/rune", { body: { id: 99 } }), s.deps);
   expect(missing.status).toBe(422);
-  expect(s.writes).toHaveLength(1);
+  expect(s.writes).toHaveLength(2);
+});
+
+test("a skipped ban or empty pick (the client's -1) never shows as a champion", async () => {
+  const skipped = { id: 9, actorCellId: 7, type: "pick", isInProgress: false, completed: true, championId: -1 };
+  const { client } = fakeClient(world([[turnPick, skipped]], { bans: { myTeamBans: [-1, 2], theirTeamBans: [-1] } }));
+  const state: any = await phoneState(client, ddragon().fetch);
+  expect(state.bans).toEqual({ mine: [{ id: 2, name: "Olaf", alias: "Olaf" }], theirs: [] });
+  expect(state.enemies[1]).toEqual({ cellId: 7, championId: 0, name: "", alias: "" });
+});
+
+test("after you lock in, the state says so; an endless timer has no countdown", async () => {
+  const done = { id: 7, actorCellId: 2, type: "pick", isInProgress: false, completed: true, championId: 2 };
+  const { client } = fakeClient(world([[done]], { timer: { adjustedTimeLeftInPhase: 9000, isInfinite: true, phase: "FINALIZATION" } }));
+  const state: any = await phoneState(client, ddragon().fetch);
+  expect(state.lockedIn).toBe(true);
+  expect(state.timer.leftMs).toBeNull();
 });
 
 test("champion and spell icons are served with no passcode", async () => {

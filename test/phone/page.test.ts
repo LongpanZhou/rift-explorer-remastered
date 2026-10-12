@@ -76,6 +76,8 @@ function champSelect() {
       { id: 13, name: "Ekko", current: true, isEditable: true, primaryStyleId: 8000, subStyleId: 8100, selectedPerkIds: RUNES },
     ],
     orderSwaps: [] as any[],
+    /** Teammates' completed picks (cells 3 to 6). */
+    teamPicks: [] as any[],
     myPick: { id: 7, actorCellId: 2, type: "pick", isInProgress: false, completed: false, championId: 0 },
     otherTurn: { id: 5, actorCellId: 3, type: "ban", isInProgress: true, completed: false, championId: 0 } as any,
     enemyPicks: [] as any[],
@@ -107,10 +109,11 @@ function champSelect() {
       if (p === "/lol-champ-select/v1/session")
         return {
           localPlayerCellId: 2,
-          actions: [[sim.otherTurn, ...sim.enemyPicks].filter(Boolean), [sim.myPick]],
+          actions: [[sim.otherTurn, ...sim.enemyPicks, ...sim.teamPicks].filter(Boolean), [sim.myPick]],
           myTeam: [2, 3, 4, 5, 6].map((cellId) => ({
             cellId,
-            championId: 0,
+            championId:
+              cellId === 2 ? (sim.myPick.completed ? sim.myPick.championId : 0) : (sim.teamPicks.find((a) => a.actorCellId === cellId)?.championId ?? 0),
             championPickIntent: cellId === 2 ? sim.myPick.championId : cellId === 4 ? 3 : 0,
             assignedPosition: "",
           })),
@@ -135,7 +138,16 @@ function champSelect() {
     delete: async (path) => void sim.writes.push({ method: "DELETE", path, body: undefined }),
     getBytes: async () => new Uint8Array(),
   };
-  return { sim, client };
+  /** Everyone on your team has locked in (the final phase): you Olaf, then Annie, Galio, Aurelion Sol, Kai'Sa. */
+  const allLocked = () => {
+    sim.otherTurn = null;
+    sim.stage = "FINALIZATION";
+    sim.myPick = { ...sim.myPick, completed: true, championId: 2 };
+    sim.teamPicks = [[3, 1], [4, 3], [5, 136], [6, 145]].map(([cell, champ]) => ({
+      id: 20 + cell, actorCellId: cell, type: "pick", isInProgress: false, completed: true, championId: champ,
+    }));
+  };
+  return { sim, client, allLocked };
 }
 
 // phone.ts keeps champion names for 10 minutes; other test files fill it with their own list.
@@ -252,7 +264,8 @@ test("on your turn a tap hovers, and Lock In locks the hovered champion", async 
 });
 
 test("of four swap entries the client lists, only the request sent to you pops up", async () => {
-  const { sim, client } = champSelect();
+  const { sim, client, allLocked } = champSelect();
+  allLocked(); // champions are swapped once everyone has locked in
   sim.swaps = [
     { id: 21, cellId: 3, state: "AVAILABLE" },
     { id: 22, cellId: 4, state: "RECEIVED" },
@@ -271,7 +284,8 @@ test("of four swap entries the client lists, only the request sent to you pops u
 });
 
 test("asking a teammate for a swap uses the client's swap id, and a sent request can be cancelled", async () => {
-  const { sim, client } = champSelect();
+  const { sim, client, allLocked } = champSelect();
+  allLocked(); // champions are swapped once everyone has locked in
   sim.swaps = [{ id: 21, cellId: 3, state: "AVAILABLE" }];
   const page = await openPage(client);
   await page.until(() => page.$("team").querySelector("button.swap") !== null);
@@ -301,7 +315,8 @@ test("the header names the client's phase between turns", async () => {
 });
 
 test("a swap request can be declined, and the pop-up goes when the request does", async () => {
-  const { sim, client } = champSelect();
+  const { sim, client, allLocked } = champSelect();
+  allLocked(); // champions are swapped once everyone has locked in
   sim.swaps = [{ id: 22, cellId: 4, state: "RECEIVED" }];
   const page = await openPage(client);
   await page.until(() => !page.$("swaps").hidden);
@@ -500,4 +515,38 @@ test("leave the lobby: two taps", async () => {
   page.$("leave").click();
   await page.until(() => sim.writes.length === 1);
   expect(sim.writes[0]).toEqual({ method: "DELETE", path: "/lol-lobby/v2/lobby", body: undefined });
+});
+
+test("summoner spells: picking the spell in your other slot swaps the two, as in the client", async () => {
+  const { sim, client } = champSelect(); // Flash and Ignite
+  const page = await openPage(client);
+  await page.until(() => !page.$("spell2").disabled);
+  page.$("spell2").click();
+  await page.until(() => page.texts("#spell-list .opt-name").length > 0);
+  const flash = [...page.$("spell-list").querySelectorAll("button")].find((b: any) => b.querySelector(".opt-name").textContent === "Flash") as any;
+  flash.click();
+  await page.until(() => page.$("spell-msg").textContent === "Spells saved.");
+  expect(sim.writes).toEqual([{ method: "PATCH", path: "/lol-champ-select/v1/session/my-selection", body: { spell1Id: 14, spell2Id: 4 } }]);
+});
+
+test("after you lock in, the hint says so and no swap of pick order is offered", async () => {
+  const { sim, client } = champSelect();
+  sim.myPick = { ...sim.myPick, completed: true, championId: 2 };
+  sim.orderSwaps = [{ id: 41, cellId: 3, state: "AVAILABLE" }, { id: 42, cellId: 4, state: "RECEIVED" }];
+  const page = await openPage(client);
+  expect(page.$("hint").textContent).toBe("You are locked in.");
+  expect(button(page.$("team"), "Swap order")).toBeUndefined();
+  expect(page.$("swaps").hidden).toBe(true);
+});
+
+test("when the client cannot be reached, the waiting screen says why", async () => {
+  const { sim, client } = champSelect();
+  sim.phase = "Lobby";
+  const page = await openPage(client);
+  client.get = async () => {
+    throw { code: "ECONNREFUSED" };
+  };
+  await page.until(() => page.$("phase").textContent === "Not connected", 3000);
+  expect(page.$("idle").hidden).toBe(false);
+  expect(page.$("idle-text").textContent).toBe("League client not running. Retrying...");
 });

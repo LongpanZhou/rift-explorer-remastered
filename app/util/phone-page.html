@@ -413,8 +413,14 @@
     try {
       next = await api("/api/state");
     } catch (err) {
-      if (!state) $("phase").textContent = "Not connected";
       say($("msg"), err.message, true);
+      // Outside champ select the message line is hidden, so the reason goes on the waiting screen.
+      if (!state || !state.inChampSelect) {
+        $("phase").textContent = "Not connected";
+        for (const id of ["bans", "zones", "dock", "skins"]) $(id).hidden = true;
+        $("idle").hidden = false;
+        $("idle-text").textContent = err.message === LOST ? LOST : err.message + ". Retrying...";
+      }
       return;
     }
     next.clockAt = Date.now();
@@ -612,6 +618,7 @@
     hint.textContent = turn
       ? (turn.type === "ban" ? "Your turn: tap a champion to ban, then Lock In" : "Your turn: tap a champion to hover it, then Lock In")
       : plan ? "Tap a champion to pre-pick it. Your team sees it; lock in on your turn."
+      : s.lockedIn ? "You are locked in."
       : s.hasPicks ? "Waiting for your turn" : "No pick to make here in this mode.";
     hint.classList.toggle("turn", !!turn);
 
@@ -693,7 +700,10 @@
       b.append(pic(iconSrc("spell", sp.file), ""), el("span", sp.name, "opt-name"));
       if (sp.disallowed) b.append(el("span", "Not allowed", "opt-note"));
       b.onclick = () => {
+        // As in the client: picking the spell in the other slot swaps the two.
+        const other = sheetSlot === "spell1" ? "spell2" : "spell1";
         const pair = { spell1: state.spells.spell1, spell2: state.spells.spell2, [sheetSlot]: sp.id };
+        if (sp.id === state.spells[other]) pair[other] = state.spells[sheetSlot];
         act("/api/spells", pair, $("spell-msg"), "Spells saved.");
       };
       return b;
