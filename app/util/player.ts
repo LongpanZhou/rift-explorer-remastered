@@ -29,6 +29,8 @@ export function lcuClient(lock: Pick<LockFile, "address" | "port" | "password">)
     // The client answers in milliseconds; a request it never answers must not hang a command
     // or the phone page.
     timeout: 15000,
+    // Every body is JSON. Axios 0.21 marks a plain string or number body as a form otherwise.
+    headers: { "Content-Type": "application/json" },
     // The client uses a self-signed certificate on 127.0.0.1 only.
     httpsAgent:
       lock.address === "127.0.0.1"

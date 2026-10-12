@@ -411,12 +411,12 @@ test("switching rune pages uses the client's current-page call, for locked pages
   const s = setup(world([[turnPick]]));
   const switched = await handlePhone(req("/api/rune", { body: { id: 11 } }), s.deps);
   expect(switched.status).toBe(200);
-  expect(s.writes[0]).toEqual({ method: "PUT", path: "/lol-perks/v1/currentpage", body: 11 });
+  expect(s.writes[0]).toEqual({ method: "PUT", path: "/lol-perks/v1/currentpage", body: "11" });
 
   // Page 12 is locked (not editable), but can still be the current page.
   const locked = await handlePhone(req("/api/rune", { body: { id: 12 } }), s.deps);
   expect(locked.status).toBe(200);
-  expect(s.writes[1]).toEqual({ method: "PUT", path: "/lol-perks/v1/currentpage", body: 12 });
+  expect(s.writes[1]).toEqual({ method: "PUT", path: "/lol-perks/v1/currentpage", body: "12" });
 
   const missing = await handlePhone(req("/api/rune", { body: { id: 99 } }), s.deps);
   expect(missing.status).toBe(422);

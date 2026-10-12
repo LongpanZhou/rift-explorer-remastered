@@ -372,11 +372,12 @@
     return box;
   }
 
-  // A request that gets no answer (the phone slept, Wi-Fi dropped) is given up after 4 s,
-  // so it can never hold up the updates.
+  // A request that gets no answer (the phone slept, Wi-Fi dropped) is given up, so it can never
+  // hold up the updates: a state read after 8 s, an action after 20 s (the PC gives the client
+  // 15 s), so a slow lock in is not reported as lost while it is still going through.
   async function api(path, body) {
     const stop = new AbortController();
-    const timer = setTimeout(() => stop.abort(), 4000);
+    const timer = setTimeout(() => stop.abort(), body ? 20000 : 8000);
     let res, data;
     try {
       res = await fetch(path, {

@@ -172,6 +172,7 @@ export async function phoneState(client: LcuClient, fetchFn?: Fetcher) {
   // Before your turn, the champion on your coming pick is your pre-pick, which your team sees.
   const plan = turn ? undefined : upcomingPick(actions, me);
   const live = actions.find(openAction);
+  const lockedIn = (cellId: number) => actions.some((a) => a.actorCellId === cellId && a.type === "pick" && a.completed);
   const mine = (session.myTeam ?? []).find((p: any) => p.cellId === me);
   // On your turn the hover is the action's champion, or the pre-pick if the client did not carry it over.
   const hover: number = turn ? turn.championId || (turn.type === "pick" ? mine?.championPickIntent || 0 : 0) : 0;
@@ -188,8 +189,9 @@ export async function phoneState(client: LcuClient, fetchFn?: Fetcher) {
   const [options, selection, champSwaps, orderSwaps, pages, allSpells, banned, skins] = await Promise.all([
     turn || plan ? choosable(client, turn?.type ?? "pick") : [],
     client.get(MY_SELECTION).catch(() => null),
-    client.get(SWAP_PATHS.champion).catch(() => []),
-    client.get(SWAP_PATHS["pick-order"]).catch(() => []),
+    // Champions are swapped only after you lock in, pick order only before: read just that list.
+    lockedIn(me) ? client.get(SWAP_PATHS.champion).catch(() => []) : [],
+    lockedIn(me) ? [] : client.get(SWAP_PATHS["pick-order"]).catch(() => []),
     client.get(PAGES).catch(() => null),
     summonerSpells(fetchFn).catch(() => []),
     disallowedSpells(client, session),
@@ -210,7 +212,6 @@ export async function phoneState(client: LcuClient, fetchFn?: Fetcher) {
   // The client can keep listing a swap as AVAILABLE when it no longer makes sense, so the game's
   // rules decide: pick order only while both of you still have to pick, champions only once both
   // of you have locked in.
-  const lockedIn = (cellId: number) => actions.some((a) => a.actorCellId === cellId && a.type === "pick" && a.completed);
   const swapMakesSense = (kind: SwapKind, cellId: number) =>
     kind === "pick-order" ? !lockedIn(me) && !lockedIn(cellId) : lockedIn(me) && lockedIn(cellId);
 
@@ -226,7 +227,7 @@ export async function phoneState(client: LcuClient, fetchFn?: Fetcher) {
     // False in modes where you make no pick here, such as ARAM.
     hasPicks: actions.some((a) => a.actorCellId === me && (a.type === "pick" || a.type === "ban")),
     // True once your pick is locked in.
-    lockedIn: actions.some((a) => a.actorCellId === me && a.type === "pick" && a.completed),
+    lockedIn: lockedIn(me),
     turn: turn ? { championId: hover, type: turn.type as string } : null,
     plan: plan ? { championId: (plan.championId as number) || 0 } : null,
     options: (options as number[])
@@ -234,7 +235,7 @@ export async function phoneState(client: LcuClient, fetchFn?: Fetcher) {
       .map((id) => ({ id, ...named(id), roles: info.get(id)?.roles ?? [] })),
     team: (session.myTeam ?? []).map((p: any) => {
       const championId: number = real(p.championId) || real(p.championPickIntent);
-      const locked = actions.some((a) => a.actorCellId === p.cellId && a.type === "pick" && a.completed);
+      const locked = lockedIn(p.cellId);
       return {
         cellId: p.cellId as number,
         mine: p.cellId === me,
@@ -268,7 +269,7 @@ export async function phoneState(client: LcuClient, fetchFn?: Fetcher) {
         .filter((x) => x.state === "RECEIVED" && isSpellOrChamp(x.id) && swapMakesSense(kind, x.cellId))
         .map((x) => {
           const from = (session.myTeam ?? []).find((p: any) => p.cellId === x.cellId);
-          const champ = from ? from.championId || from.championPickIntent || 0 : 0;
+          const champ = from ? real(from.championId) || real(from.championPickIntent) : 0;
           return { kind, id: x.id as number, cellId: x.cellId as number, ...named(champ), position: position(from) };
         })
     ),
@@ -318,7 +319,8 @@ export async function phoneRune(client: LcuClient, id: unknown) {
   if (!isSpellOrChamp(id)) throw new ActionRefused("pick a rune page");
   const pages: any[] = await client.get(PAGES);
   if (!pages.some((p) => p.id === id)) throw new ActionRefused("that rune page does not exist");
-  await client.put("/lol-perks/v1/currentpage", id);
+  // The client takes the bare id as the JSON body. Axios 0.21 refuses a number, so it is sent as JSON text.
+  await client.put("/lol-perks/v1/currentpage", JSON.stringify(id));
   return { ok: true };
 }
 

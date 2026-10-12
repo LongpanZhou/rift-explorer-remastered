@@ -74,6 +74,9 @@ fn sidecar_path(app: &tauri::AppHandle) -> Result<std::path::PathBuf, SidecarErr
         .map_err(|e| unavailable(format!("no cache folder: {e}")))?;
     std::fs::create_dir_all(&dir)
         .map_err(|e| unavailable(format!("could not create {}: {e}", dir.display())))?;
+    // Commands can run at the same time; one at a time checks and writes the file.
+    static UNPACK: Mutex<()> = Mutex::new(());
+    let _one_at_a_time = UNPACK.lock().unwrap_or_else(|e| e.into_inner());
     let exe = dir.join("lcu-sidecar.exe");
     let stamp = dir.join("lcu-sidecar.version");
     let want = format!("{} {}", env!("CARGO_PKG_VERSION"), SIDECAR_EXE.len());
@@ -81,7 +84,7 @@ fn sidecar_path(app: &tauri::AppHandle) -> Result<std::path::PathBuf, SidecarErr
         && std::fs::metadata(&exe).map(|m| m.len()).ok() == Some(SIDECAR_EXE.len() as u64);
     if !current {
         // Write to a temporary name first, so a half-written file is never run.
-        let tmp = dir.join("lcu-sidecar.tmp");
+        let tmp = dir.join(format!("lcu-sidecar.{}.tmp", std::process::id()));
         std::fs::write(&tmp, SIDECAR_EXE)
             .and_then(|_| std::fs::rename(&tmp, &exe))
             .and_then(|_| std::fs::write(&stamp, &want))
@@ -134,14 +137,39 @@ async fn run_sidecar(app: &tauri::AppHandle, args: Vec<String>) -> Result<String
 
 /// The phone page's server process, if one is running.
 #[derive(Default)]
-struct PhoneServer(Mutex<Option<std::process::Child>>);
+struct PhoneServer {
+    child: Mutex<Option<std::process::Child>>,
+    /// Held for a whole start, so two starts never overlap and lose track of a server.
+    starting: Mutex<()>,
+    /// Set by a stop. A start still waiting for its server stops that server instead of keeping it.
+    cancelled: std::sync::atomic::AtomicBool,
+}
 
-/// Stops the phone server, if it is running.
+/// Stops the phone server, and any start still in progress.
 fn stop_phone(server: &PhoneServer) {
-    if let Some(mut child) = server.0.lock().unwrap_or_else(|e| e.into_inner()).take() {
+    server.cancelled.store(true, std::sync::atomic::Ordering::SeqCst);
+    if let Some(mut child) = server.child.lock().unwrap_or_else(|e| e.into_inner()).take() {
         let _ = child.kill();
         let _ = child.wait();
     }
+}
+
+/// Starts the phone server from `cmd`, replacing one already running. A stop that comes while it
+/// starts wins: the new server is stopped and the start fails.
+fn start_phone(server: &PhoneServer, cmd: std::process::Command, port: u16, timeout: std::time::Duration) -> Result<(), SidecarError> {
+    let _one_at_a_time = server.starting.lock().unwrap_or_else(|e| e.into_inner());
+    stop_phone(server);
+    server.cancelled.store(false, std::sync::atomic::Ordering::SeqCst);
+    let mut child = spawn_phone(cmd, port, timeout)?;
+    let mut slot = server.child.lock().unwrap_or_else(|e| e.into_inner());
+    // Checked under the lock stop_phone takes, so a stop either sees this server or cancels it here.
+    if server.cancelled.load(std::sync::atomic::Ordering::SeqCst) {
+        let _ = child.kill();
+        let _ = child.wait();
+        return Err(SidecarError { code: -1, message: "the phone page was stopped".into() });
+    }
+    *slot = Some(child);
+    Ok(())
 }
 
 /// This computer's address on the local network, for the QR code. No packets are sent: a UDP
@@ -173,13 +201,9 @@ async fn phone_start(app: tauri::AppHandle, port: u16) -> Result<(), SidecarErro
     }
     let exe = sidecar_path(&app)?;
     tauri::async_runtime::spawn_blocking(move || {
-        let server = app.state::<PhoneServer>();
-        stop_phone(&server);
         let mut cmd = sidecar_command(&exe);
         cmd.args(["serve", &port.to_string()]);
-        let child = spawn_phone(cmd, port, PHONE_START_TIMEOUT)?;
-        *server.0.lock().unwrap_or_else(|e| e.into_inner()) = Some(child);
-        Ok(())
+        start_phone(&app.state::<PhoneServer>(), cmd, port, PHONE_START_TIMEOUT)
     })
     .await
     .map_err(|e| SidecarError { code: -1, message: format!("phone task failed: {e}") })?
@@ -204,11 +228,14 @@ fn spawn_phone(
     let (tx, rx) = std::sync::mpsc::channel::<Option<String>>();
     if let Some(stderr) = child.stderr.take() {
         std::thread::spawn(move || {
+            // Lines are kept only until the server is up; after that they are read and dropped.
             let mut text = String::new();
+            let mut ready = false;
             for line in std::io::BufRead::lines(std::io::BufReader::new(stderr)).map_while(Result::ok) {
-                if line.starts_with("phone page on port") {
+                if !ready && line.starts_with("phone page on port") {
+                    ready = true;
                     let _ = tx.send(None);
-                } else {
+                } else if !ready {
                     text.push_str(&line);
                     text.push('\n');
                 }
@@ -293,6 +320,53 @@ mod tests {
         assert!(err.message.contains("already in use"), "{}", err.message);
         let _ = first.kill();
         let _ = first.wait();
+    }
+
+    /// A stand-in server that says it is listening after `delay` seconds, then runs until stopped.
+    fn slow_server(delay: &str) -> std::process::Command {
+        let mut cmd = std::process::Command::new("sh");
+        cmd.args(["-c", &format!("sleep {delay}; echo 'phone page on port 1' >&2; exec sleep 60")]);
+        cmd
+    }
+
+    #[test]
+    fn a_stop_during_a_start_cancels_it_and_leaves_no_server() {
+        let server = std::sync::Arc::new(PhoneServer::default());
+        let starting = {
+            let server = server.clone();
+            std::thread::spawn(move || start_phone(&server, slow_server("1"), 1, Duration::from_secs(15)))
+        };
+        // The start is waiting for its server to come up; the panel closes now.
+        std::thread::sleep(Duration::from_millis(200));
+        stop_phone(&server);
+        let started = starting.join().unwrap();
+        assert_eq!(started.err().map(|e| e.message), Some("the phone page was stopped".to_string()));
+        assert!(server.child.lock().unwrap().is_none());
+    }
+
+    #[test]
+    fn a_stop_after_a_start_stops_the_server() {
+        let server = PhoneServer::default();
+        start_phone(&server, slow_server("0"), 1, Duration::from_secs(15)).ok().expect("starts");
+        assert!(server.child.lock().unwrap().is_some());
+        stop_phone(&server);
+        assert!(server.child.lock().unwrap().is_none());
+    }
+
+    #[test]
+    fn a_second_start_replaces_the_first_server() {
+        let Some(exe) = sidecar() else { return };
+        let lock = lockfile("rift-phone-test-lockfile-twice");
+        let port = 18790;
+        let server = PhoneServer::default();
+        start_phone(&server, serve(&exe, &lock, port), port, Duration::from_secs(15)).ok().expect("first start");
+        let first = server.child.lock().unwrap().as_ref().map(|c| c.id());
+        // The first is stopped before the second binds the same port, so the second does not fail.
+        start_phone(&server, serve(&exe, &lock, port), port, Duration::from_secs(15)).ok().expect("second start");
+        let second = server.child.lock().unwrap().as_ref().map(|c| c.id());
+        assert_ne!(first, second);
+        stop_phone(&server);
+        assert!(server.child.lock().unwrap().is_none());
     }
 
     #[test]

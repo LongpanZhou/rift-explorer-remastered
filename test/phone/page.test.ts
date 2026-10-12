@@ -342,9 +342,9 @@ test("updates keep coming after a request that is never answered", async () => {
   sim.hangNext = true;
   await Bun.sleep(2300); // the next round hangs
   sim.enemyPicks = [{ id: 9, actorCellId: 7, type: "pick", isInProgress: false, completed: true, championId: 2 }];
-  // The page gives up on the stuck request after 4 s, then updates again.
-  await page.until(() => page.texts("#enemies .nm")[0] === "Olaf", 9000);
-}, 15000);
+  // The page gives up on the stuck request after 8 s, then updates again.
+  await page.until(() => page.texts("#enemies .nm")[0] === "Olaf", 13000);
+}, 20000);
 
 // ---- The features asked for, one by one, through the phone page. ----
 
