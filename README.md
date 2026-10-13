@@ -79,6 +79,14 @@ Customize your profile, claim rewards, manage loot and rune pages, and run champ
     <td align="center"><b>Auto champ select</b><br><img src="screenshots/09-auto.png" alt="Auto champ select" /></td>
     <td align="center"><b>Developer (API docs)</b><br><img src="screenshots/10-developer.png" alt="Developer" /></td>
   </tr>
+  <tr>
+    <td align="center"><b>Phone champ select (QR code)</b><br><img src="screenshots/11-phone-qr.png" alt="Phone champ select QR code" /></td>
+    <td align="center"><b>Port 8787 already in use</b><br><img src="screenshots/12-phone-port-busy.png" alt="Port 8787 already in use" /></td>
+  </tr>
+  <tr>
+    <td align="center"><b>ASCII art status</b><br><img src="screenshots/13-ascii-art.png" alt="ASCII art status" /></td>
+    <td></td>
+  </tr>
 </table>
 
 ## 📱 Phone champ select
