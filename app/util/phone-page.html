@@ -402,6 +402,29 @@
     return data;
   }
 
+  // The first tap shows `armedText` and arms the button; the second runs `run`. Without a second
+  // tap within 4 s the button goes back to its first text.
+  function twoTap(button, armedText, run, armedClass) {
+    const idleText = button.textContent;
+    let timer = null;
+    const disarm = () => {
+      clearTimeout(timer);
+      timer = null;
+      button.textContent = idleText;
+      if (armedClass) button.classList.remove(armedClass);
+    };
+    button.onclick = () => {
+      if (!timer) {
+        button.textContent = armedText;
+        if (armedClass) button.classList.add(armedClass);
+        timer = setTimeout(disarm, 4000);
+        return;
+      }
+      disarm();
+      run();
+    };
+  }
+
   // Sends one action, shows the result in the given line, then reloads the state.
   async function act(path, body, box, done) {
     say(box, "");
@@ -961,36 +984,9 @@
   $("cancel").onclick = () => act("/api/cancel", {}, $("idle-msg"), "Search cancelled.");
   $("create-lobby").onclick = () =>
     act("/api/lobby", { queueId: Number($("create-mode").value) }, $("idle-msg"), "Lobby created.");
-  // Leaving the lobby takes two taps, so one stray tap does not close it.
-  let leaveArmed = null;
-  $("leave").onclick = () => {
-    if (!leaveArmed) {
-      $("leave").textContent = "Tap again to leave";
-      leaveArmed = setTimeout(() => { leaveArmed = null; $("leave").textContent = "Leave lobby"; }, 4000);
-      return;
-    }
-    clearTimeout(leaveArmed);
-    leaveArmed = null;
-    $("leave").textContent = "Leave lobby";
-    act("/api/leave", {}, $("idle-msg"), "Left the lobby.");
-  };
-  // Dodging takes two taps and says what it costs, so one stray tap does not leave the game.
-  let dodgeArmed = null;
-  const DODGE_TEXT = "Dodge";
-  $("dodge").onclick = () => {
-    const b = $("dodge");
-    if (!dodgeArmed) {
-      b.textContent = "Tap again to dodge (LP loss and a queue wait)";
-      b.classList.add("armed");
-      dodgeArmed = setTimeout(() => { dodgeArmed = null; b.textContent = DODGE_TEXT; b.classList.remove("armed"); }, 4000);
-      return;
-    }
-    clearTimeout(dodgeArmed);
-    dodgeArmed = null;
-    b.textContent = DODGE_TEXT;
-    b.classList.remove("armed");
-    act("/api/dodge", {}, $("msg"), "Left champion select.");
-  };
+  // Leaving the lobby and dodging take two taps, so one stray tap does not do them.
+  twoTap($("leave"), "Tap again to leave", () => act("/api/leave", {}, $("idle-msg"), "Left the lobby."));
+  twoTap($("dodge"), "Tap again to dodge (LP loss and a queue wait)", () => act("/api/dodge", {}, $("msg"), "Left champion select."), "armed");
   $("spell1").onclick = () => openSpells("spell1");
   $("spell2").onclick = () => openSpells("spell2");
   $("runes").onclick = openRunes;

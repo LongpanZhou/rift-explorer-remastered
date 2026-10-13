@@ -123,6 +123,9 @@ function regaliaOf(regalia: any, level: number) {
   };
 }
 
+/** The challenge ids shown as profile tokens, from a challenge summary. */
+const tokenIds = (summary: any): number[] => (summary?.topChallenges ?? []).map((c: any) => c.id);
+
 /**
  * The parts of the profile the client can change while the app is open: icon,
  * level, status, crest and banner, background, title and tokens. Read on a timer; the big
@@ -141,7 +144,7 @@ export async function loadLive(client: LcuClient) {
     regalia: regaliaOf(regalia, me.summonerLevel),
     backgroundSkinId: profile.backgroundSkinId as number,
     currentTitle: (summary?.title?.itemId ?? -1) as number,
-    currentTokens: (summary?.topChallenges ?? []).map((c: any) => c.id as number),
+    currentTokens: tokenIds(summary),
   };
 }
 
@@ -287,7 +290,7 @@ export async function loadChallenges(client: LcuClient) {
       .map((t) => ({ itemId: t.itemId as number, name: t.name as string }))
       .sort((a, b) => byName(a.name, b.name)),
     currentTitle: summary?.title?.itemId ?? -1,
-    currentTokens: (summary?.topChallenges ?? []).map((c: any) => c.id as number),
+    currentTokens: tokenIds(summary),
   };
 }
 
@@ -312,7 +315,7 @@ export async function setTitle(client: LcuClient, itemId: number) {
     throw new ActionRefused(`title ${itemId} is not owned by this account`);
   }
   return client.post(UPDATE_PREFS, {
-    challengeIds: (summary?.topChallenges ?? []).map((c: any) => c.id),
+    challengeIds: tokenIds(summary),
     title: itemId === -1 ? "" : String(itemId),
   });
 }

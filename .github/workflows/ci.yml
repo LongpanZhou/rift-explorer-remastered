@@ -30,6 +30,11 @@ jobs:
         with:
           targets: ${{ matrix.target }}
       - run: bun install --frozen-lockfile
+      - uses: actions/setup-go@v5
+        with:
+          go-version: stable
+      - name: Build the ASCII art converter
+        run: bun run converter ${{ matrix.target }}
       - name: Sidecar tests (golden snapshot, unit, CLI exit codes)
         run: bun test
       - name: Build the sidecar
@@ -54,6 +59,11 @@ jobs:
       - uses: oven-sh/setup-bun@v2
       - uses: dtolnay/rust-toolchain@stable
       - run: bun install --frozen-lockfile
+      - uses: actions/setup-go@v5
+        with:
+          go-version: stable
+      - name: Build the ASCII art converter for Windows
+        run: bun run converter x86_64-pc-windows-msvc
       - name: Build the sidecar for Windows
         run: bun build --compile app/util/sidecar-main.ts --outfile src-tauri/binaries/lcu-sidecar-x86_64-pc-windows-msvc.exe
       - name: "Smoke test: sidecar finds no client and exits with a message (D6, criterion 5)"
@@ -87,6 +97,11 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf libfuse2
       - run: bun install --frozen-lockfile
+      - uses: actions/setup-go@v5
+        with:
+          go-version: stable
+      - name: Build the ASCII art converter for Linux
+        run: bun run converter x86_64-unknown-linux-gnu
       - name: Sidecar tests (golden snapshot, unit, CLI exit codes)
         run: bun test
       - name: Build the sidecar for Linux

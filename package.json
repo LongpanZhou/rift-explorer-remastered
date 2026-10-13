@@ -1,7 +1,7 @@
 {
   "name": "rift-explorer-remastered",
   "private": true,
-  "version": "0.1.5",
+  "version": "0.1.7",
   "type": "module",
   "scripts": {
     "dev": "vite",
@@ -10,6 +10,7 @@
     "tauri": "tauri",
     "test": "bun test",
     "sidecar": "bun build --compile app/util/sidecar-main.ts --outfile src-tauri/binaries/lcu-sidecar-$(rustc --print host-tuple)",
+    "converter": "bun scripts/build-converter.ts",
     "live-check": "bun scripts/live_check.ts"
   },
   "dependencies": {

@@ -2486,10 +2486,9 @@ dependencies = [
 
 [[package]]
 name = "rift-explorer-tauri"
-version = "0.1.5"
+version = "0.1.7"
 dependencies = [
  "serde",
- "serde_json",
  "tauri",
  "tauri-build",
 ]

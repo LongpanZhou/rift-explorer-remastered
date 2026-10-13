@@ -59,6 +59,10 @@ const reply = (body: unknown, status = 200) => new Response(JSON.stringify(body)
 
 const isSpellOrChamp = (n: unknown): n is number => Number.isInteger(n) && (n as number) > 0;
 
+/** The champion on a turn: the hover, or on your pick the pre-pick if the client did not carry it over. */
+const hoverOf = (turn: { championId?: number; type?: string }, intent?: number) =>
+  turn.championId || (turn.type === "pick" ? intent || 0 : 0);
+
 interface ChampionInfo {
   name: string;
   alias: string;
@@ -177,7 +181,7 @@ export async function phoneState(client: LcuClient, fetchFn?: Fetcher) {
   const lockedIn = (cellId: number) => actions.some((a) => a.actorCellId === cellId && a.type === "pick" && a.completed);
   const mine = (session.myTeam ?? []).find((p: any) => p.cellId === me);
   // On your turn the hover is the action's champion, or the pre-pick if the client did not carry it over.
-  const hover: number = turn ? turn.championId || (turn.type === "pick" ? mine?.championPickIntent || 0 : 0) : 0;
+  const hover: number = turn ? hoverOf(turn, mine?.championPickIntent) : 0;
   // Banned, locked and teammates' champions cannot be chosen, so they are not offered.
   const taken = takenBy(session, actions, me);
   const named = (id: number) => ({
@@ -297,7 +301,7 @@ export async function phoneChoose(client: LcuClient, championId: unknown, lock: 
   if (!turn) throw new ActionRefused(locking ? "it is not your turn" : "you have no pick left");
   const intent = (session.myTeam ?? []).find((p: any) => p.cellId === me)?.championPickIntent;
   // Locking with no champion locks the hover, or your pre-pick if the client did not carry it over.
-  const id = useHover ? turn.championId || (turn.type === "pick" ? intent : 0) : championId;
+  const id = useHover ? hoverOf(turn, intent) : championId;
   if (!isSpellOrChamp(id)) throw new ActionRefused("hover a champion first");
   if (!(await choosable(client, turn.type)).includes(id)) throw new ActionRefused("that champion is not available to you");
   if (takenBy(session, actions, me).has(id)) throw new ActionRefused("that champion is banned or taken");
@@ -414,22 +418,23 @@ async function lobbyState(client: LcuClient) {
   return { queueId: queueId as number, modes: await modeOptions(client).catch(() => []) };
 }
 
-/** Opens a lobby in a mode, as the client's Create lobby does. Only from the home screen, where no lobby is open. */
-export async function phoneCreateLobby(client: LcuClient, queueId: unknown) {
+/** Sets the lobby's mode from the given phase. `refusal` says what to do when the client is in another phase. */
+async function setLobbyMode(client: LcuClient, queueId: unknown, phase: string, refusal: string) {
   if (!isSpellOrChamp(queueId)) throw new ActionRefused("pick a mode");
-  await requirePhase(client, "None", "a lobby is already open; leave it first");
+  await requirePhase(client, phase, refusal);
   if (!(await modeOptions(client)).some((m) => m.id === queueId)) throw new ActionRefused("that mode is not available");
   await client.post("/lol-lobby/v2/lobby", { queueId });
   return { ok: true };
 }
 
+/** Opens a lobby in a mode, as the client's Create lobby does. Only from the home screen, where no lobby is open. */
+export function phoneCreateLobby(client: LcuClient, queueId: unknown) {
+  return setLobbyMode(client, queueId, "None", "a lobby is already open; leave it first");
+}
+
 /** Switches the lobby to another mode. Only from the lobby, so a search has to be cancelled first. */
-export async function phoneMode(client: LcuClient, queueId: unknown) {
-  if (!isSpellOrChamp(queueId)) throw new ActionRefused("pick a mode");
-  await requirePhase(client, "Lobby", "change the mode from a lobby in the client");
-  if (!(await modeOptions(client)).some((m) => m.id === queueId)) throw new ActionRefused("that mode is not available");
-  await client.post("/lol-lobby/v2/lobby", { queueId });
-  return { ok: true };
+export function phoneMode(client: LcuClient, queueId: unknown) {
+  return setLobbyMode(client, queueId, "Lobby", "change the mode from a lobby in the client");
 }
 
 /** Leaves the lobby. Only from the lobby, not during a search. */
@@ -515,10 +520,11 @@ export async function handlePhone(req: Request, deps: PhoneDeps): Promise<Respon
  * for the `phone page on port` line on stderr before it shows the QR code.
  */
 export function servePhone(lock: LockFile, port: number): Promise<never> {
+  const client = lcuClient(lock);
   Bun.serve({
     hostname: "0.0.0.0",
     port,
-    fetch: (req) => handlePhone(req, { client: lcuClient(lock) }),
+    fetch: (req) => handlePhone(req, { client }),
   });
   console.error(`phone page on port ${port}`);
   return new Promise(() => {});

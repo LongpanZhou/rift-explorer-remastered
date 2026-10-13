@@ -19,23 +19,18 @@ env:
   APP_EXE: "rift-explorer-tauri"
   PRODUCT: "Rift Explorer Remastered"
   NOTES: 'Downloads: macOS .zip (Apple Silicon: macos-arm64, Intel: macos-x64; unzip and open the app), Windows .exe, Linux .AppImage. Builds are not notarized: on macOS, if the app is blocked, open System Settings > Privacy & Security and click Open Anyway.'
+  GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
 jobs:
   create-release:
     runs-on: ubuntu-22.04
-    outputs:
-      release_id: ${{ steps.release.outputs.release_id }}
     steps:
       - name: Create the release once, before the builds
-        id: release
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           TAG="${{ github.ref_name }}"
           if ! gh release view "$TAG" -R "${{ github.repository }}" >/dev/null 2>&1; then
             gh release create "$TAG" -R "${{ github.repository }}" --title "$PRODUCT $TAG" --notes "$NOTES"
           fi
-          echo "release_id=$(gh api repos/${{ github.repository }}/releases/tags/$TAG -q .id)" >> "$GITHUB_OUTPUT"
 
   build:
     needs: create-release
@@ -47,18 +42,22 @@ jobs:
           - os: macos-14
             platform: macos-arm64
             target: aarch64-apple-darwin
+            triple: aarch64-apple-darwin
             bun_target: bun-darwin-arm64
             sidecar: lcu-sidecar-aarch64-apple-darwin
           - os: macos-14
             platform: macos-x64
             target: x86_64-apple-darwin
+            triple: x86_64-apple-darwin
             bun_target: bun-darwin-x64-baseline
             sidecar: lcu-sidecar-x86_64-apple-darwin
           - os: windows-latest
             platform: windows-x64
+            triple: x86_64-pc-windows-msvc
             sidecar: lcu-sidecar-x86_64-pc-windows-msvc.exe
           - os: ubuntu-22.04
             platform: linux-x86_64
+            triple: x86_64-unknown-linux-gnu
             sidecar: lcu-sidecar-x86_64-unknown-linux-gnu
     runs-on: ${{ matrix.os }}
     steps:
@@ -82,6 +81,11 @@ jobs:
       - name: Sidecar for this Mac
         if: runner.os == 'macOS'
         run: bun build --compile --target=${{ matrix.bun_target }} app/util/sidecar-main.ts --outfile src-tauri/binaries/${{ matrix.sidecar }}
+      - uses: actions/setup-go@v5
+        with:
+          go-version: stable
+      - name: ASCII art converter for this platform
+        run: bun run converter ${{ matrix.triple }}
 
       - name: Build the macOS app (.app)
         if: runner.os == 'macOS'
@@ -95,8 +99,6 @@ jobs:
 
       - name: Publish the macOS file
         if: runner.os == 'macOS'
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           VERSION="${GITHUB_REF_NAME#v}"
           OUT="${APP_SLUG}-${VERSION}-${{ matrix.platform }}.zip"
@@ -110,8 +112,6 @@ jobs:
           gh release upload "$GITHUB_REF_NAME" "$OUT" -R "$GITHUB_REPOSITORY" --clobber
       - name: Publish the Linux file
         if: runner.os == 'Linux'
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           VERSION="${GITHUB_REF_NAME#v}"
           OUT="${APP_SLUG}-${VERSION}-${{ matrix.platform }}.AppImage"
@@ -120,8 +120,6 @@ jobs:
       - name: Publish the Windows .exe
         if: runner.os == 'Windows'
         shell: pwsh
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           $version = $env:GITHUB_REF_NAME.TrimStart('v')
           $out = "$($env:APP_SLUG)-$version-${{ matrix.platform }}.exe"

@@ -1,23 +1,9 @@
-import path from "path";
+import path, { join, normalize } from "path";
 import { EventEmitter } from "events";
 import { exec, execFile } from "child_process";
-import { normalize, join } from "path";
 import { existsSync, readFileSync } from "fs-extra";
-import { FSWatcher, watch } from "chokidar";
 import { parseDocument } from "yaml";
-import { platform } from "os";
-import { parse } from "./LockFileParser";
-import { homedir } from "os";
-
-interface LockFile {
-  username: string;
-  password: string;
-  port: number;
-  protocol: string;
-  PID: number;
-  processName: string;
-  address: string;
-}
+import { homedir, platform } from "os";
 
 /**
  * Check if is windows other wise assume is macOS since that is the
@@ -45,22 +31,11 @@ function lookup(command: string, done: (error: Error | null, stdout: string, std
 }
 
 /**
- * Connector which allows us to check for the league and riot client.
+ * Finds the Riot client and League install folder. Emits "riotclient" with that folder.
  * @since 7.0.0
  */
 export default class RiotConnector extends EventEmitter {
   leaguePath: string = "";
-  _riotClientWatch: NodeJS.Timeout;
-  _leagueClientWatch: NodeJS.Timeout;
-  _lockfileWatch: FSWatcher;
-
-  /**
-   * Connector which allows us to check for the league and riot client.
-   * @since 7.0.0
-   */
-  constructor() {
-    super();
-  }
 
   _checkRiotClient() {
     if (platform() === "linux") {
@@ -69,7 +44,6 @@ export default class RiotConnector extends EventEmitter {
       if (!existsSync(join(leaguePath, "lockfile"))) return;
       this.leaguePath = leaguePath;
       this.emit("riotclient", leaguePath);
-      this._lockfileCreated(join(leaguePath, "lockfile"));
       return;
     }
     /**
@@ -175,83 +149,5 @@ export default class RiotConnector extends EventEmitter {
       this.leaguePath = match[1];
       this.emit("riotclient", this.leaguePath);
     });
-  }
-
-  _checkLeagueClient() {
-    /**
-     * Riot client isn't open, therefore we don't have the leaguePath.
-     */
-    if (!this.leaguePath) return;
-
-    /**
-     * Return if we are already watching the lockfile (= path hasn't changed).
-     */
-    if (
-      this._lockfileWatch &&
-      this._lockfileWatch.getWatched()[this.leaguePath]
-    )
-      return;
-
-    this._lockfileWatch?.close();
-    console.error(
-      `Will start watching ${path.join(this.leaguePath, "lockfile")}`
-    );
-
-    this._lockfileWatch = watch(path.join(this.leaguePath, "lockfile"));
-    this._lockfileWatch.on("add", this._lockfileCreated.bind(this));
-    this._lockfileWatch.on("change", this._lockfileCreated.bind(this));
-    this._lockfileWatch.on("unlink", this._lockfileRemoved.bind(this));
-  }
-
-  /**
-   * If the lockfile has been created then parse it and stop watching for it.
-   * @param path
-   */
-  _lockfileCreated(path: string) {
-    parse(path).then((data) => {
-      this.emit("leagueclient", data);
-      clearInterval(this._riotClientWatch);
-      console.error(
-        "Lockfile information sent; clearing riotclient check interval"
-      );
-    }, (err) => console.error(`lockfile not readable: ${err}`));
-  }
-
-  /**
-   * If the lockfile has been removed then close the watcher.
-   */
-  _lockfileRemoved() {
-    this.emit("disconnect");
-    this._lockfileWatch.close();
-    console.error(
-      "Lost connection to leagueclient; restarting riotclient watch"
-    );
-    this._riotClientWatch = setInterval(this._checkRiotClient.bind(this), 1000);
-  }
-
-  /**
-   * Start the watchers.
-   */
-  start() {
-    this._riotClientWatch ??= setInterval(
-      this._checkRiotClient.bind(this),
-      1000
-    );
-    if (platform() === "linux") {
-      return;
-    }
-    this._leagueClientWatch ??= setInterval(
-      this._checkLeagueClient.bind(this),
-      1000
-    );
-  }
-
-  /**
-   * Stop and close the watchers.
-   */
-  stop() {
-    clearInterval(this._riotClientWatch);
-    clearInterval(this._leagueClientWatch);
-    this._lockfileWatch?.close();
   }
 }

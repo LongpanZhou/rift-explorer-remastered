@@ -2,70 +2,48 @@
  * Builds the Swagger spec for the League client's local API.
  * Originally written by @Pupix (rift-explorer 2.0.1).
  */
-import { Agent } from "https";
-
 import mixin from "mixin-deep";
 import { buildCatalogPaths } from "./catalogPaths";
-import axios from "axios";
+import { lcuClient } from "./player";
 
 interface createSpecInterface {
   address: string;
   port: number;
-  protocol: string;
-  username: string;
   password: string;
 }
 
-interface rpInterface {
-  uri: string;
-  insecure: boolean;
-}
-
 /**
- * GET a URL and return the response body. The client uses a self-signed
- * certificate, so certificate checks are skipped only when `insecure` is set.
- * The caller sets `insecure` to true only for 127.0.0.1.
- * @param uri {string}
- * @param insecure {boolean}
+ * The schema of one map value or vector item: an object, a string, a number, or a
+ * reference to another definition.
  */
-async function rp({ uri, insecure }: rpInterface): Promise<any> {
-  const request = await axios.get(uri, {
-    httpsAgent: insecure ? new Agent({ rejectUnauthorized: false }) : undefined,
-  });
-  return request.data;
+function elementSchema(elementType: string): object {
+  if (elementType === "object") return { additionalProperties: true, type: "object" };
+  if (elementType === "string") return { type: "string" };
+  if (/^u?int/.test(elementType)) return { format: elementType, type: "integer" };
+  if (elementType === "double" || elementType === "float") return { format: elementType, type: "number" };
+  return { $ref: `#/definitions/${elementType}` };
 }
 
 /**
  * @param address
  * @param port
- * @param username
  * @param password
- * @param protocol
  * @returns {Promise<{basePath: string, paths: {}, host: string, produces: [string, string, string], schemes: [*], definitions: {}, swagger: string, consumes, info: {description: string, title: string, version: *}}>}
  */
 export default async ({
   address = "127.0.0.1",
   port,
-  username = "riot",
   password,
-  protocol = "https",
 }: createSpecInterface): Promise<any> => {
-  const insecure = address === "127.0.0.1";
-  const helpConsole = await rp({
-    uri: `${protocol}://${username}:${password}@${address}:${port}/help?format=Console`,
-    insecure,
-  });
-  const helpFull = await rp({
-    uri: `${protocol}://${username}:${password}@${address}:${port}/help?format=Full`,
-    insecure,
-  });
-  const builds = await rp({
-    uri: `${protocol}://${username}:${password}@${address}:${port}/system/v1/builds`,
-    insecure,
-  });
+  const client = lcuClient({ address, port, password });
+  const [helpConsole, helpFull, builds] = await Promise.all([
+    client.get("/help?format=Console"),
+    client.get("/help?format=Full"),
+    client.get("/system/v1/builds"),
+  ]);
   const swagger = {
     host: `${address}:${port}`,
-    schemes: [protocol],
+    schemes: ["https"],
 
     consumes: [
       "application/json",
@@ -133,166 +111,35 @@ export default async ({
       swagger.definitions[type].properties = {};
 
       help.types[type].fields.forEach((field) => {
-        const fieldKey = field.name;
-        swagger.definitions[type].properties[fieldKey] = {};
-        swagger.definitions[type].properties[fieldKey].type = field.type.type;
+        const prop: any = { type: field.type.type };
+        swagger.definitions[type].properties[field.name] = prop;
 
         if (field.description) {
-          swagger.definitions[type].properties[fieldKey].description =
-            field.description;
+          prop.description = field.description;
         }
 
-        // Check if the type of the field is an (u)int
-        if (
-          /^u?int/.test(swagger.definitions[type].properties[fieldKey].type)
-        ) {
-          swagger.definitions[type].properties[fieldKey].format =
-            swagger.definitions[type].properties[fieldKey].type;
-          swagger.definitions[type].properties[fieldKey].type = "integer";
-          return;
+        const elementType = field.type.elementType;
+        if (/^u?int/.test(prop.type)) {
+          prop.format = prop.type;
+          prop.type = "integer";
+        } else if (prop.type === "double" || prop.type === "float") {
+          prop.format = prop.type;
+          prop.type = "number";
+        } else if (prop.type === "bool") {
+          prop.type = "boolean";
+        } else if (prop.type === "object") {
+          prop.additionalProperties = true;
+        } else if (prop.type === "map") {
+          prop.type = "object";
+          prop.additionalProperties = elementSchema(elementType);
+        } else if (prop.type === "vector") {
+          prop.type = "array";
+          prop.items = elementSchema(elementType);
+        } else if (prop.type !== "string") {
+          // A reference to another definition
+          prop.$ref = `#/definitions/${prop.type}`;
+          delete prop.type;
         }
-
-        // Check if the type of the field is a double
-        if (swagger.definitions[type].properties[fieldKey].type === "string") {
-          return;
-        }
-
-        // Check if the type of the field is a double
-        if (swagger.definitions[type].properties[fieldKey].type === "double") {
-          swagger.definitions[type].properties[fieldKey].format =
-            swagger.definitions[type].properties[fieldKey].type;
-          swagger.definitions[type].properties[fieldKey].type = "number";
-          return;
-        }
-
-        // Check if the type of the field is a float
-        if (swagger.definitions[type].properties[fieldKey].type === "float") {
-          swagger.definitions[type].properties[fieldKey].format =
-            swagger.definitions[type].properties[fieldKey].type;
-          swagger.definitions[type].properties[fieldKey].type = "number";
-          return;
-        }
-
-        // Check if the type of the field is signed as `object`
-        if (swagger.definitions[type].properties[fieldKey].type === "object") {
-          swagger.definitions[type].properties[
-            fieldKey
-          ].additionalProperties = true;
-          return;
-        }
-
-        // Check if the type of the field is signed as `boolean`
-        if (swagger.definitions[type].properties[fieldKey].type === "bool") {
-          swagger.definitions[type].properties[fieldKey].type = "boolean";
-          return;
-        }
-
-        if (swagger.definitions[type].properties[fieldKey].type === "map") {
-          swagger.definitions[type].properties[fieldKey].type = "object";
-
-          if (field.type.elementType === "object") {
-            swagger.definitions[type].properties[
-              fieldKey
-            ].additionalProperties = {
-              additionalProperties: true,
-              type: "object",
-            };
-            return;
-          }
-
-          if (field.type.elementType === "string") {
-            swagger.definitions[type].properties[
-              fieldKey
-            ].additionalProperties = {
-              type: "string",
-            };
-            return;
-          }
-
-          if (/^u?int/.test(field.type.elementType)) {
-            swagger.definitions[type].properties[
-              fieldKey
-            ].additionalProperties = {
-              format: field.type.elementType,
-              type: "integer",
-            };
-            return;
-          }
-
-          if (
-            field.type.elementType === "double" ||
-            field.type.elementType === "float"
-          ) {
-            swagger.definitions[type].properties[
-              fieldKey
-            ].additionalProperties = {
-              format: field.type.elementType,
-              type: "number",
-            };
-            return;
-          }
-
-          swagger.definitions[type].properties[
-            fieldKey
-          ].additionalProperties = {
-            $ref: `#/definitions/${field.type.elementType}`,
-          };
-
-          return;
-        }
-
-        if (swagger.definitions[type].properties[fieldKey].type === "vector") {
-          swagger.definitions[type].properties[fieldKey].type = "array";
-
-          if (field.type.elementType === "object") {
-            swagger.definitions[type].properties[fieldKey].items = {
-              additionalProperties: true,
-              type: "object",
-            };
-            return;
-          }
-
-          if (field.type.elementType === "string") {
-            swagger.definitions[type].properties[fieldKey].items = {
-              type: "string",
-            };
-            return;
-          }
-
-          if (/^u?int/.test(field.type.elementType)) {
-            swagger.definitions[type].properties[fieldKey].items = {
-              format: field.type.elementType,
-              type: "integer",
-            };
-            return;
-          }
-
-          if (
-            field.type.elementType === "double" ||
-            field.type.elementType === "float"
-          ) {
-            swagger.definitions[type].properties[fieldKey].items = {
-              format: field.type.elementType,
-              type: "number",
-            };
-            return;
-          }
-
-          swagger.definitions[type].properties[fieldKey].items = {
-            $ref: `#/definitions/${field.type.elementType}`,
-          };
-
-          return;
-        }
-
-        // Check if the type is an actual object
-        // this is the case when a ref to another definition is made
-        // if (typeof swagger.definitions[type].properties[fieldKey].type === 'object') {
-        swagger.definitions[type].properties[
-          fieldKey
-        ].$ref = `#/definitions/${swagger.definitions[type].properties[fieldKey].type}`;
-        delete swagger.definitions[type].properties[fieldKey].type;
-        // }
       });
 
       swagger.definitions[type].type = "object";

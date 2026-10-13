@@ -12,6 +12,11 @@ pub struct SidecarError {
     message: String,
 }
 
+/// An error with no sidecar exit code, for a failure in the app itself.
+fn unavailable(message: String) -> SidecarError {
+    SidecarError { code: -1, message }
+}
+
 /// EXIT.ACTION_REFUSED in app/util/exitCodes.ts.
 const ACTION_REFUSED: i32 = 7;
 
@@ -41,18 +46,9 @@ async fn player(app: tauri::AppHandle, args: Vec<String>) -> Result<String, Side
     run_sidecar(&app, full).await
 }
 
-/// The sidecar's output. Only what the commands need is kept.
-struct Done {
-    success: bool,
-    code: Option<i32>,
-    stdout: Vec<u8>,
-    stderr: Vec<u8>,
-}
-
 /// Where the sidecar executable is. On macOS and Linux it is a separate file next to the app.
 #[cfg(not(windows))]
 fn sidecar_path(_app: &tauri::AppHandle) -> Result<std::path::PathBuf, SidecarError> {
-    let unavailable = |e: String| SidecarError { code: -1, message: e };
     Ok(std::env::current_exe()
         .map_err(|e| unavailable(format!("no app location: {e}")))?
         .parent()
@@ -69,7 +65,6 @@ const SIDECAR_EXE: &[u8] = include_bytes!("../binaries/lcu-sidecar-x86_64-pc-win
 
 #[cfg(windows)]
 fn sidecar_path(app: &tauri::AppHandle) -> Result<std::path::PathBuf, SidecarError> {
-    let unavailable = |e: String| SidecarError { code: -1, message: e };
     let dir = app
         .path()
         .app_cache_dir()
@@ -112,30 +107,28 @@ fn sidecar_command(exe: &std::path::Path) -> std::process::Command {
 }
 
 /// Runs the sidecar to the end and keeps its output.
-async fn sidecar_output(app: &tauri::AppHandle, args: Vec<String>) -> Result<Done, SidecarError> {
-    let unavailable = |e: String| SidecarError { code: -1, message: e };
+async fn sidecar_output(app: &tauri::AppHandle, args: Vec<String>) -> Result<std::process::Output, SidecarError> {
     let exe = sidecar_path(app)?;
-    let out = tauri::async_runtime::spawn_blocking(move || {
+    tauri::async_runtime::spawn_blocking(move || {
         sidecar_command(&exe).args(&args).stdin(std::process::Stdio::null()).output()
     })
     .await
     .map_err(|e| unavailable(format!("sidecar task failed: {e}")))?
-    .map_err(|e| unavailable(format!("could not run the sidecar: {e}")))?;
-    Ok(Done { success: out.status.success(), code: out.status.code(), stdout: out.stdout, stderr: out.stderr })
+    .map_err(|e| unavailable(format!("could not run the sidecar: {e}")))
 }
 
 /// Logs and errors arrive on stderr; on a non-zero exit the stderr text is
 /// returned as the error message.
 async fn run_sidecar(app: &tauri::AppHandle, args: Vec<String>) -> Result<String, SidecarError> {
-    let done = sidecar_output(app, args).await?;
-    if done.success {
+    let out = sidecar_output(app, args).await?;
+    if out.status.success() {
         // Reuse the stdout buffer (it can be over 1 MB) instead of copying it.
-        Ok(String::from_utf8(done.stdout)
+        Ok(String::from_utf8(out.stdout)
             .unwrap_or_else(|e| String::from_utf8_lossy(e.as_bytes()).into_owned()))
     } else {
         Err(SidecarError {
-            code: done.code.unwrap_or(-1),
-            message: String::from_utf8_lossy(&done.stderr).trim().to_string(),
+            code: out.status.code().unwrap_or(-1),
+            message: String::from_utf8_lossy(&out.stderr).trim().to_string(),
         })
     }
 }
@@ -162,12 +155,17 @@ struct PhoneServer {
     cancelled: std::sync::atomic::AtomicBool,
 }
 
+/// Kills a server process and waits for it to exit, so it is not left behind as a zombie.
+fn reap(child: &mut std::process::Child) {
+    let _ = child.kill();
+    let _ = child.wait();
+}
+
 /// Stops the phone server, and any start still in progress.
 fn stop_phone(server: &PhoneServer) {
     server.cancelled.store(true, std::sync::atomic::Ordering::SeqCst);
     if let Some(mut running) = server.child.lock().unwrap_or_else(|e| e.into_inner()).take() {
-        let _ = running.child.kill();
-        let _ = running.child.wait();
+        reap(&mut running.child);
     }
 }
 
@@ -202,8 +200,7 @@ fn check_phone(server: &PhoneServer) -> PhoneHealth {
         return PhoneHealth { state: "ok", reason: String::new() };
     }
     let lines = last_lines(&running.log);
-    let _ = running.child.kill();
-    let _ = running.child.wait();
+    reap(&mut running.child);
     *slot = None;
     let reason = if lines.is_empty() { "it stopped answering".to_string() } else { format!("it stopped answering: {lines}") };
     PhoneHealth { state: "not-answering", reason }
@@ -234,9 +231,8 @@ fn start_phone(server: &PhoneServer, cmd: std::process::Command, port: u16, time
     let mut slot = server.child.lock().unwrap_or_else(|e| e.into_inner());
     // Checked under the lock stop_phone takes, so a stop either sees this server or cancels it here.
     if server.cancelled.load(std::sync::atomic::Ordering::SeqCst) {
-        let _ = running.child.kill();
-        let _ = running.child.wait();
-        return Err(SidecarError { code: -1, message: "the phone page was stopped".into() });
+        reap(&mut running.child);
+        return Err(unavailable("the phone page was stopped".into()));
     }
     *slot = Some(running);
     Ok(())
@@ -246,7 +242,6 @@ fn start_phone(server: &PhoneServer, cmd: std::process::Command, port: u16, time
 /// socket only picks the route.
 #[tauri::command]
 fn phone_lan_ip() -> Result<String, SidecarError> {
-    let unavailable = |e: String| SidecarError { code: -1, message: e };
     let socket = std::net::UdpSocket::bind("0.0.0.0:0")
         .map_err(|e| unavailable(format!("no network socket: {e}")))?;
     socket
@@ -276,7 +271,7 @@ async fn phone_start(app: tauri::AppHandle, port: u16) -> Result<(), SidecarErro
         start_phone(&app.state::<PhoneServer>(), cmd, port, PHONE_START_TIMEOUT)
     })
     .await
-    .map_err(|e| SidecarError { code: -1, message: format!("phone task failed: {e}") })?
+    .map_err(|e| unavailable(format!("phone task failed: {e}")))?
 }
 
 /// Starts `cmd` (the sidecar's `serve`) and waits until it says it is listening. Returns
@@ -286,7 +281,6 @@ fn spawn_phone(
     port: u16,
     timeout: std::time::Duration,
 ) -> Result<Running, SidecarError> {
-    let unavailable = |e: String| SidecarError { code: -1, message: e };
     let mut child = cmd
         .stdin(std::process::Stdio::null())
         .stdout(std::process::Stdio::null())
@@ -333,8 +327,7 @@ fn spawn_phone(
             })
         }
         Err(_) => {
-            let _ = child.kill();
-            let _ = child.wait();
+            reap(&mut child);
             Err(unavailable(format!("the phone page did not start on port {port}")))
         }
     }
@@ -345,7 +338,7 @@ fn spawn_phone(
 async fn phone_status(app: tauri::AppHandle) -> Result<PhoneHealth, SidecarError> {
     tauri::async_runtime::spawn_blocking(move || check_phone(&app.state::<PhoneServer>()))
         .await
-        .map_err(|e| SidecarError { code: -1, message: format!("phone task failed: {e}") })
+        .map_err(|e| unavailable(format!("phone task failed: {e}")))
 }
 
 /// Stops the phone page.

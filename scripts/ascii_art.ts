@@ -11,15 +11,9 @@
  */
 import { join } from "path";
 
-import { D, NBSP, padTo, widthOf } from "../src/player/width";
-import { encodeText } from "../app/util/text";
-
-// Measured in the client: 44 "#" fit on a row and 46 do not. Rows are kept to
-// 40 "#" widths, and the first and last rows (which also get the client's curly
-// quote) to 38. A "#" is 556 units, so these are in D (722 units) below.
-const HASH = 556;
-const ROW_D = (40 * HASH) / D;
-const EDGE_ROW_D = (38 * HASH) / D;
+import { D, NBSP, widthOf } from "../src/player/width";
+import { padArt } from "../src/player/asciiArt";
+import { encodeText, joinClientLines } from "../app/util/text";
 
 /**
  * Smiley on a grid of `cols` x `rows` cells: non-breaking spaces for background,
@@ -41,9 +35,8 @@ function smiley(cols = 30, rows = 20): string[] {
 }
 
 
-const art = smiley();
-const rows = art.map((r, i) => padTo(r, (i === 0 || i === art.length - 1 ? EDGE_ROW_D : ROW_D) * D));
-const text = rows.join("\r");
+const rows = padArt(smiley());
+const text = joinClientLines(rows);
 
 for (const r of rows) console.log(`${r}  ${(widthOf(r) / D).toFixed(2)} D`);
 

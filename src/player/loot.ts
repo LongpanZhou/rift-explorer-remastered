@@ -38,11 +38,11 @@ export function summarizeLoot(items: LootItem[]): LootSummary {
   const shards = items.filter((i) => i.kind === "skin" || i.kind === "ward");
   const safe = [...champions, ...shards]
     .filter((i) => i.disenchant > 0 && safeCount(i) > 0)
-    .sort((a, b) => b.disenchant * safeCount(b) - a.disenchant * safeCount(a));
+    .sort((a, b) => safeWorth(b) - safeWorth(a));
   const safeValue = (currency: "BE" | "OE") =>
     total(
       safe.filter((i) => i.currency === currency),
-      (i) => worth(i, safeCount(i))
+      safeWorth
     );
 
   return {

@@ -87,8 +87,6 @@ describe("golden spec", () => {
     const spec = await createSpec({
       address: "127.0.0.1",
       port: server.port,
-      protocol: "https",
-      username: "riot",
       password: PASSWORD,
     });
 

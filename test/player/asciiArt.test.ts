@@ -1,37 +1,36 @@
 import { expect, test } from "bun:test";
-import { asciiRows, fitsStatusBox, padArt, SHADES } from "../../src/player/asciiArt";
+import { fitsStatusBox, padArt } from "../../src/player/asciiArt";
 import { ADV, LINE_WIDTH, NBSP, widthOf } from "../../src/player/width";
 
-test("dark cells get the densest shade and light cells get a space", () => {
-  expect(asciiRows([0, 255], 2, false)).toEqual([`${SHADES[0]} `]);
-});
-
-test("the shade follows the luminance in eight even steps", () => {
-  expect(asciiRows([31, 32], 2, false)).toEqual([`${SHADES[0]}${SHADES[1]}`]);
-  expect(asciiRows([224, 255], 2, false)).toEqual([`${SHADES[7]}${SHADES[7]}`]);
-});
-
-test("cells are cut into rows of the given width", () => {
-  expect(asciiRows([0, 0, 255, 255], 2, false)).toEqual([`${SHADES[0]}${SHADES[0]}`, `${SHADES[7]}${SHADES[7]}`]);
-});
-
-test("invert swaps dark and light", () => {
-  expect(asciiRows([0, 255], 2, true)).toEqual([` ${SHADES[0]}`]);
-});
-
-test("no picture gives no rows", () => {
-  expect(asciiRows([], 10, false)).toEqual([]);
-  expect(padArt([])).toEqual([]);
-});
+// The shades the converter is asked for (src-tauri/src/ascii.rs), darkest first.
+const SHADES = "#*+=-:. ";
 
 test("art rows use non-breaking spaces only, since the client collapses plain spaces", () => {
-  expect(padArt(["# "])).toEqual([`#${NBSP}`]);
+  const [row] = padArt(["# "]);
+  expect(row).toContain("#");
+  expect(row).not.toContain(" ");
 });
 
-test("art rows are padded to the same width", () => {
+test("art rows are padded to the same width: the first and last to 38 '#', the others to 40", () => {
   const rows = padArt(["##", "#"]);
-  expect(rows).toEqual([`##`, `${NBSP}#${NBSP}`]);
-  expect(widthOf(rows[0])).toBe(widthOf(rows[1]));
+  expect(widthOf(rows[0])).toBe(38 * ADV["#"]);
+  expect(widthOf(rows[1])).toBe(38 * ADV["#"]);
+  const body = padArt(["#", "#", "#"]);
+  expect(widthOf(body[1])).toBe(40 * ADV["#"]);
+});
+
+test("a narrow picture is centered in the status box, not left at its edge", () => {
+  const rows = padArt(Array.from({ length: 6 }, (_, i) => (i % 2 ? "#".repeat(20) : "#".repeat(14) + " ".repeat(6))));
+  const middle = rows[1];
+  expect(widthOf(middle)).toBe(40 * ADV["#"]);
+  const leading = middle.length - middle.replace(/^ +/, "").length;
+  const trailing = middle.length - middle.replace(/ +$/, "").length;
+  expect(leading).toBeGreaterThan(0);
+  expect(Math.abs(leading - trailing)).toBeLessThanOrEqual(1);
+});
+
+test("no art gives no rows", () => {
+  expect(padArt([])).toEqual([]);
 });
 
 test("40 columns of any shade fit the status box", () => {

@@ -4,7 +4,8 @@ import { invokeJson, messageFor, type SidecarError } from "../errors";
 import { formatDuration, queueName, summarize, type Game } from "./summary";
 import { safeCount, safeWorth, summarizeLoot, worth, type LootItem } from "./loot";
 import { fillerFor, LINE_INDENT, NBSP } from "./width";
-import { asciiRows, cellLuminance, fitsStatusBox, padArt } from "./asciiArt";
+import { fitsStatusBox, padArt } from "./asciiArt";
+import { invoke } from "@tauri-apps/api/core";
 import { encodeText, joinClientLines, splitClientLines, toClientText } from "../../app/util/text";
 import StatusError from "../StatusError";
 import PhonePanel from "./PhonePanel";
@@ -1452,35 +1453,92 @@ function StatusMessage(props: { value: string; busy: boolean; save: (m: string) 
 const ASCII_MAX_COLS = 60;
 /** The width the picture starts at: the most the status box fits. */
 const ASCII_DEFAULT_COLS = 40;
+/** The longest side of the picture sent to the converter. The art is at most 60 characters wide, so more detail is wasted. */
+const ASCII_PICTURE_PX = 512;
 
-/** Drop a picture, choose its width and shading, preview it as ASCII, and set it as your status. */
+/** The picture as PNG bytes, scaled down and on a white background, for the converter on the Mac. */
+function pictureBytes(file: File): Promise<Uint8Array> {
+  return new Promise((resolve, reject) => {
+    const url = URL.createObjectURL(file);
+    const image = new Image();
+    image.onerror = () => {
+      URL.revokeObjectURL(url);
+      reject(new Error("That file could not be read as a picture."));
+    };
+    image.onload = () => {
+      URL.revokeObjectURL(url);
+      const scale = Math.min(1, ASCII_PICTURE_PX / Math.max(image.naturalWidth, image.naturalHeight));
+      const canvas = document.createElement("canvas");
+      canvas.width = Math.max(1, Math.round(image.naturalWidth * scale));
+      canvas.height = Math.max(1, Math.round(image.naturalHeight * scale));
+      const ctx = canvas.getContext("2d");
+      if (!ctx) return reject(new Error("This browser cannot read the picture."));
+      ctx.fillStyle = "#fff";
+      ctx.fillRect(0, 0, canvas.width, canvas.height);
+      ctx.drawImage(image, 0, 0, canvas.width, canvas.height);
+      canvas.toBlob(async (blob) => {
+        if (!blob) return reject(new Error("This browser cannot read the picture."));
+        resolve(new Uint8Array(await blob.arrayBuffer()));
+      }, "image/png");
+    };
+    image.src = url;
+  });
+}
+
+/** The character sets, as the site ascii-converter.github.io offers them. The keys are sent to the converter. */
+const CHARACTER_SETS: [string, string][] = [
+  ["standard", "Standard"],
+  ["detailed", "Detailed"],
+  ["blocks", "Blocks"],
+  ["binary", "Binary"],
+];
+
+/** Drop a picture, choose its width, character set and shading, preview it as ASCII, and set it as your status. */
 function AsciiArt(props: { busy: boolean; setStatus: (text: string) => void }) {
   const [cols, setCols] = useState(ASCII_DEFAULT_COLS);
   const [invert, setInvert] = useState(false);
-  const [img, setImg] = useState<HTMLImageElement | null>(null);
+  const [chars, setChars] = useState("standard");
+  const [picture, setPicture] = useState<Uint8Array | null>(null);
   const [name, setName] = useState("");
+  const [art, setArt] = useState<string[] | null>(null);
+  const [problem, setProblem] = useState("");
   const [drag, setDrag] = useState(false);
   const fileRef = useRef<HTMLInputElement>(null);
 
-  const art = useMemo(() => {
-    if (!img) return null;
-    // A character cell is about twice as tall as it is wide, so halve the row count.
-    const rows = Math.max(4, Math.round((cols * img.naturalHeight) / img.naturalWidth / 2));
-    return padArt(asciiRows(cellLuminance(img, cols, rows), cols, invert));
-  }, [img, cols, invert]);
+  // The converter runs on the Mac, so each change of picture, width or shading asks it again. An
+  // answer to an earlier setting is dropped.
+  useEffect(() => {
+    if (!picture) {
+      setArt(null);
+      return;
+    }
+    let current = true;
+    invoke<string>("ascii_art", picture, { headers: { "x-cols": String(cols), "x-invert": invert ? "1" : "0", "x-chars": chars } })
+      .then((text) => {
+        if (!current) return;
+        setProblem("");
+        setArt(padArt(text.split("\n").filter((row) => row.length > 0)));
+      })
+      .catch((e) => {
+        if (!current) return;
+        setArt(null);
+        setProblem(String(e));
+      });
+    return () => {
+      current = false;
+    };
+  }, [picture, cols, invert, chars]);
   // A row wider than the status box would wrap onto a second line in the client, so it cannot be set.
   const tooWide = !!art && !fitsStatusBox(art);
 
   const load = (file: File | undefined) => {
     if (!file || !file.type.startsWith("image/")) return;
-    const url = URL.createObjectURL(file);
-    const image = new Image();
-    image.onload = () => {
-      setName(file.name);
-      setImg(image);
-      URL.revokeObjectURL(url);
-    };
-    image.src = url;
+    pictureBytes(file)
+      .then((bytes) => {
+        setName(file.name);
+        setPicture(bytes);
+      })
+      .catch((e: Error) => setProblem(e.message));
   };
 
   return (
@@ -1507,10 +1565,22 @@ function AsciiArt(props: { busy: boolean; setStatus: (text: string) => void }) {
         Characters wide: {cols}
         <input type="range" min={10} max={ASCII_MAX_COLS} value={cols} onChange={(e) => setCols(Number(e.target.value))} />
       </label>
+      <label className="ascii-option">
+        Character set
+        <select value={chars} onChange={(e) => setChars(e.target.value)}>
+          {CHARACTER_SETS.map(([key, label]) => (
+            <option key={key} value={key}>
+              {label}
+            </option>
+          ))}
+        </select>
+      </label>
       <label className="auto-toggle">
         <input type="checkbox" checked={invert} onChange={(e) => setInvert(e.target.checked)} />
         Invert (light becomes dark)
       </label>
+
+      {problem && <p className="msg bad">{problem}</p>}
 
       {art && art.length > 0 && (
         <>
