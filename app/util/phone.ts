@@ -457,6 +457,8 @@ type Route = (deps: PhoneDeps, body: any) => Promise<unknown>;
 
 /** The API, by "METHOD /path". A request for anything else is 404. */
 const ROUTES: Record<string, Route> = {
+  // The app checks that the server is alive with this; it does not touch the League client.
+  "GET /api/ping": async () => ({ ok: true }),
   "GET /api/state": (d) => phoneState(d.client, d.fetch),
   "POST /api/choose": (d, b) => phoneChoose(d.client, b.championId, b.lock),
   "POST /api/spells": (d, b) => phoneSpells(d.client, b.spell1, b.spell2),

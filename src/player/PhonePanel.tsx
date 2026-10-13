@@ -1,22 +1,40 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import QRCode from "qrcode";
 import { invoke } from "@tauri-apps/api/core";
 
 /** The phone page runs on this port on the local network. */
 const PORT = 8787;
 
-/** Starts the phone champ select page and shows a QR code to open it on a phone on the same Wi-Fi. */
-export default function PhonePanel() {
+/** How often the running phone page is checked, and how many restarts a minute are tried. */
+const CHECK_MS = 4000;
+const RESTARTS_PER_MINUTE = 3;
+
+/** What phone_status answers: "off", "ok", "stopped" or "not-answering", and why. */
+interface PhoneHealth {
+  state: string;
+  reason: string;
+}
+
+/**
+ * Starts the phone champ select page and shows a QR code to open it on a phone on the same Wi-Fi.
+ * While it runs, it is checked every few seconds; a server that stopped or stopped answering is
+ * started again on the same address, so the phone carries on, and the reason is shown.
+ */
+export default function PhonePanel({ checkMs = CHECK_MS }: { checkMs?: number } = {}) {
   const [link, setLink] = useState("");
   const [qr, setQr] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
+  const [notice, setNotice] = useState("");
+  const restarts = useRef<number[]>([]);
 
   const message = (e: unknown) => (e as { message?: string })?.message ?? String(e);
 
   const start = async () => {
     setBusy(true);
     setError("");
+    setNotice("");
+    restarts.current = [];
     try {
       const ip: string = await invoke("phone_lan_ip");
       await invoke("phone_start", { port: PORT });
@@ -33,6 +51,7 @@ export default function PhonePanel() {
   const stop = async () => {
     setBusy(true);
     setError("");
+    setNotice("");
     try {
       await invoke("phone_stop");
       setLink("");
@@ -43,6 +62,38 @@ export default function PhonePanel() {
       setBusy(false);
     }
   };
+
+  // Watch the running server; restart it when it stopped, a few times a minute at most.
+  useEffect(() => {
+    if (!link) return;
+    let checking = false;
+    const timer = setInterval(async () => {
+      if (checking) return;
+      checking = true;
+      try {
+        const health: PhoneHealth = await invoke("phone_status");
+        if (health.state === "ok" || health.state === "off") return;
+        const now = Date.now();
+        restarts.current = restarts.current.filter((t) => now - t < 60_000);
+        if (restarts.current.length >= RESTARTS_PER_MINUTE) {
+          setLink("");
+          setQr("");
+          setNotice("");
+          setError(`The phone page keeps stopping (${health.reason}). Start it again when the League client is ready.`);
+          return;
+        }
+        restarts.current.push(now);
+        setNotice(`The phone page stopped (${health.reason}). Restarting it...`);
+        await invoke("phone_start", { port: PORT });
+        setNotice(`The phone page stopped (${health.reason}) and was restarted. The phone reconnects by itself.`);
+      } catch (e) {
+        setNotice(`The phone page stopped and could not be restarted: ${message(e)}. Retrying...`);
+      } finally {
+        checking = false;
+      }
+    }, checkMs);
+    return () => clearInterval(timer);
+  }, [link, checkMs]);
 
   // Stop the server when the panel closes, so it is not left running.
   useEffect(() => () => {
@@ -67,6 +118,7 @@ export default function PhonePanel() {
           </div>
         </div>
       )}
+      {notice && <p className="notice">{notice}</p>}
       {error && <p className="notice">{error}</p>}
     </div>
   );
