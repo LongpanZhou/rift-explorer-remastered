@@ -1,3 +1,5 @@
+mod ascii;
+
 use serde::Serialize;
 use std::sync::Mutex;
 use tauri::Manager;
@@ -97,6 +99,9 @@ fn sidecar_path(app: &tauri::AppHandle) -> Result<std::path::PathBuf, SidecarErr
 fn sidecar_command(exe: &std::path::Path) -> std::process::Command {
     #[allow(unused_mut)]
     let mut cmd = std::process::Command::new(exe);
+    // The compiled sidecar can run out of executable memory and exit with code 133 while its
+    // JIT is on (seen on macOS 26). It does light work, so the JIT is turned off.
+    cmd.env("BUN_JSC_useJIT", "0");
     #[cfg(windows)]
     {
         use std::os::windows::process::CommandExt;
@@ -353,7 +358,7 @@ fn phone_stop(server: tauri::State<PhoneServer>) {
 pub fn run() {
     let app = tauri::Builder::default()
         .manage(PhoneServer::default())
-        .invoke_handler(tauri::generate_handler![get_spec, player, phone_lan_ip, phone_start, phone_status, phone_stop])
+        .invoke_handler(tauri::generate_handler![get_spec, player, phone_lan_ip, phone_start, phone_status, phone_stop, ascii::ascii_art])
         .build(tauri::generate_context!())
         .expect("error while building tauri application");
     app.run(|handle, event| {
@@ -389,6 +394,27 @@ mod tests {
         let mut cmd = sidecar_command(exe);
         cmd.arg("--lockfile").arg(lock).args(["serve", &port.to_string()]);
         cmd
+    }
+
+    #[test]
+    fn every_sidecar_command_turns_the_jit_off() {
+        let cmd = sidecar_command(std::path::Path::new("lcu-sidecar"));
+        let jit = cmd.get_envs().find(|(key, _)| *key == "BUN_JSC_useJIT").and_then(|(_, v)| v);
+        assert_eq!(jit, Some(std::ffi::OsStr::new("0")));
+    }
+
+    /// Exit code 133 is "Ran out of executable memory". The built sidecar must start past that;
+    /// without a client, `player profile` fails with another code.
+    #[test]
+    fn the_built_sidecar_does_not_run_out_of_executable_memory() {
+        let Some(exe) = sidecar() else { return };
+        let out = sidecar_command(&exe)
+            .arg("--lockfile")
+            .arg(lockfile("rift-explorer-no-client.lock"))
+            .args(["player", "profile"])
+            .output()
+            .unwrap();
+        assert_ne!(out.status.code(), Some(133), "{}", String::from_utf8_lossy(&out.stderr));
     }
 
     #[test]

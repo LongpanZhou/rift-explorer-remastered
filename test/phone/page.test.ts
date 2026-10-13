@@ -456,6 +456,20 @@ test("lobby: switch the mode, queue up, then cancel the search", async () => {
   expect(sim.writes[2]).toEqual({ method: "DELETE", path: "/lol-lobby/v2/lobby/matchmaking/search", body: undefined });
 });
 
+test("home screen: open a lobby in the mode picked", async () => {
+  const { sim, client } = champSelect();
+  sim.phase = "None";
+  const page = await openPage(client);
+  await page.until(() => !page.$("create").hidden);
+  expect(page.$("phase").textContent).toBe("Not in a lobby");
+  expect(page.texts("#create-mode option")).toEqual(["Ranked Solo/Duo", "Normal Blind", "ARAM"]);
+
+  page.$("create-mode").value = "450";
+  page.$("create-lobby").click();
+  await page.until(() => sim.writes.length === 1);
+  expect(sim.writes[0]).toEqual({ method: "POST", path: "/lol-lobby/v2/lobby", body: { queueId: 450 } });
+});
+
 test("match found: accept it", async () => {
   const { sim, client } = champSelect();
   sim.phase = "ReadyCheck";

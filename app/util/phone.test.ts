@@ -1,6 +1,6 @@
 import { beforeEach, expect, test } from "bun:test";
 import { ActionRefused, type LcuClient } from "./player";
-import { handlePhone, phoneDodge, phoneSwap, phoneCancelQueue, phoneChoose, phoneLeaveLobby, phoneMode, phoneQueue, phoneReadyCheck, phoneSkin, phoneSpells, phoneState, resetModeCache, type PhoneDeps } from "./phone";
+import { handlePhone, phoneCreateLobby, phoneDodge, phoneSwap, phoneCancelQueue, phoneChoose, phoneLeaveLobby, phoneMode, phoneQueue, phoneReadyCheck, phoneSkin, phoneSpells, phoneState, resetModeCache, type PhoneDeps } from "./phone";
 import { resetIconCache } from "./phoneIcons";
 import { resetRuneIconCache } from "./phoneRunes";
 import { fakeClient } from "./fakeClient";
@@ -116,7 +116,7 @@ test("state shows names, your turn and options; outside champ select it says so"
   ]);
   expect(state.spells).toEqual({ spell1: 4, spell2: 14 });
   const outside = await phoneState(fakeClient({ [PHASE]: "Lobby" }).client);
-  expect(outside).toEqual({ phase: "Lobby", inChampSelect: false, search: null, readyCheck: null, lobby: null });
+  expect(outside).toEqual({ phase: "Lobby", inChampSelect: false, search: null, readyCheck: null, lobby: null, createModes: [] });
 });
 
 test("state includes the team, bans, enemies, spell list, runes and swaps", async () => {
@@ -592,6 +592,28 @@ test("leaving the lobby deletes it, and is refused during a search", async () =>
   const queue = fakeClient({ [PHASE]: "Matchmaking" });
   await expect(phoneLeaveLobby(queue.client)).rejects.toBeInstanceOf(ActionRefused);
   expect(queue.writes).toHaveLength(0);
+});
+
+test("creating a lobby posts the mode from the home screen", async () => {
+  const home = fakeClient({ [PHASE]: "None", "/lol-game-queues/v1/queues": QUEUES });
+  await phoneCreateLobby(home.client, 400);
+  expect(home.writes).toEqual([{ method: "POST", path: LOBBY, body: { queueId: 400 } }]);
+});
+
+test("creating a lobby is refused when one is already open, or for a mode that is not offered", async () => {
+  const open = fakeClient({ [PHASE]: "Lobby", "/lol-game-queues/v1/queues": QUEUES });
+  await expect(phoneCreateLobby(open.client, 400)).rejects.toBeInstanceOf(ActionRefused);
+  expect(open.writes).toHaveLength(0);
+  const off = fakeClient({ [PHASE]: "None", "/lol-game-queues/v1/queues": QUEUES });
+  await expect(phoneCreateLobby(off.client, 490)).rejects.toBeInstanceOf(ActionRefused);
+  await expect(phoneCreateLobby(off.client, "400; drop")).rejects.toBeInstanceOf(ActionRefused);
+  expect(off.writes).toHaveLength(0);
+});
+
+test("the home screen lists the modes a lobby can be created in", async () => {
+  const state: any = await phoneState(fakeClient({ [PHASE]: "None", "/lol-game-queues/v1/queues": QUEUES }).client);
+  expect(state.lobby).toBeNull();
+  expect(state.createModes).toEqual([{ id: 400, name: "Draft Pick" }, { id: 450, name: "ARAM" }]);
 });
 
 const SKIN_INFO = "/lol-champ-select/v1/skin-selector-info";

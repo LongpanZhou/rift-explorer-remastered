@@ -13,7 +13,6 @@
         "cookie": "^0.7",
         "formdata-node": "^6",
         "fs-extra": "7.0.1",
-        "jscii": "1.0.0",
         "mixin-deep": "^2.0.1",
         "qrcode": "1.5.4",
         "react": "^18.3.1",
@@ -589,8 +588,6 @@
     "js-tokens": ["js-tokens@4.0.0", "", {}, "sha512-RdJUflcE3cUzKiMqQgsCu06FPu9UdIJO0beYbPhHN4k6apgJtifcoCtT9bcxOpYBtpD2kCM6Sbzg4CausW/PKQ=="],
 
     "js-yaml": ["js-yaml@4.1.0", "", { "dependencies": { "argparse": "^2.0.1" }, "bin": { "js-yaml": "bin/js-yaml.js" } }, "sha512-wpxZs9NoxZaJESJGIZTyDEaYpl0FKSA+FB9aJiyemKhMwkxQg63h4T1KJgUGHpTqPDNRcmmYLugrRjJlBtWvRA=="],
-
-    "jscii": ["jscii@1.0.0", "", {}, "sha512-RkpS64Zn8YGELnjP/uMGAR8bTXdtZvV5cJkTW1JILtflqVdTTFhSeL/KPMJJBcEdMAxiqVqKtbXDtmhzFFnDWA=="],
 
     "jsonfile": ["jsonfile@4.0.0", "", { "optionalDependencies": { "graceful-fs": "^4.1.6" } }, "sha512-m6F1R3z8jjlf2imQHS2Qez5sjKWQzbuuhuJ/FKYFRZvPE3PuHcSMVZzfsLhGVOkfd20obL5SWEBew5ShlquNxg=="],
 

@@ -159,7 +159,9 @@ export async function phoneState(client: LcuClient, fetchFn?: Fetcher) {
   const phase: string = await client.get(GAMEFLOW);
   if (phase !== "ChampSelect") {
     const [queue, lobby] = await Promise.all([queueState(client, phase), phase === "Lobby" ? lobbyState(client) : null]);
-    return { phase, inChampSelect: false, ...queue, lobby };
+    // On the home screen, the modes a new lobby can be opened in.
+    const createModes = phase === "None" ? await modeOptions(client).catch(() => []) : [];
+    return { phase, inChampSelect: false, ...queue, lobby, createModes };
   }
 
   const [session, info] = await Promise.all([
@@ -412,6 +414,15 @@ async function lobbyState(client: LcuClient) {
   return { queueId: queueId as number, modes: await modeOptions(client).catch(() => []) };
 }
 
+/** Opens a lobby in a mode, as the client's Create lobby does. Only from the home screen, where no lobby is open. */
+export async function phoneCreateLobby(client: LcuClient, queueId: unknown) {
+  if (!isSpellOrChamp(queueId)) throw new ActionRefused("pick a mode");
+  await requirePhase(client, "None", "a lobby is already open; leave it first");
+  if (!(await modeOptions(client)).some((m) => m.id === queueId)) throw new ActionRefused("that mode is not available");
+  await client.post("/lol-lobby/v2/lobby", { queueId });
+  return { ok: true };
+}
+
 /** Switches the lobby to another mode. Only from the lobby, so a search has to be cancelled first. */
 export async function phoneMode(client: LcuClient, queueId: unknown) {
   if (!isSpellOrChamp(queueId)) throw new ActionRefused("pick a mode");
@@ -469,6 +480,7 @@ const ROUTES: Record<string, Route> = {
   "POST /api/decline": (d) => phoneReadyCheck(d.client, "decline"),
   "POST /api/queue": (d) => phoneQueue(d.client),
   "POST /api/cancel": (d) => phoneCancelQueue(d.client),
+  "POST /api/lobby": (d, b) => phoneCreateLobby(d.client, b.queueId),
   "POST /api/mode": (d, b) => phoneMode(d.client, b.queueId),
   "POST /api/leave": (d) => phoneLeaveLobby(d.client),
   "POST /api/rune": (d, b) => phoneRune(d.client, b.id),

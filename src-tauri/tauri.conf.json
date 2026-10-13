@@ -25,7 +25,11 @@
   "bundle": {
     "active": true,
     "externalBin": [
-      "binaries/lcu-sidecar"
+      "binaries/lcu-sidecar",
+      "binaries/ascii-image-converter"
+    ],
+    "resources": [
+      "../third_party/ascii-image-converter/LICENSE.txt"
     ],
     "targets": "all",
     "macOS": {

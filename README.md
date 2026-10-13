@@ -46,7 +46,7 @@ Customize your profile, claim rewards, manage loot and rune pages, and run champ
 | 🌄 | **Background** | Set your profile background from any skin you own. |
 | 🏷️ | **Title & tokens** | Pick an owned title and up to three earned challenge tokens. |
 | 💬 | **Status message** | Set your custom status and online availability. |
-| 🎨 | **ASCII art status** | Turn any image into ASCII art sized to fit the client's status box, with an invert option. |
+| 🎨 | **ASCII art status** | Turn a picture into ASCII art, with a width and an invert option, and set it as your status. Sized to fit the client's status box. |
 | 🎁 | **Rewards** | See every reward waiting to be claimed, and claim them one at a time or all at once. |
 | 💎 | **Loot** | Wallet balances (RP, Blue Essence, Orange Essence) and what your loot is worth if you disenchant it. |
 | 📜 | **Rune pages** | View and edit rune pages, with the client's rules checked before anything is saved. Buy extra pages with BE or RP when the store offers them. |

@@ -150,6 +150,7 @@
   .idle > .accept { margin-top: 12px; }
   .ready { display: flex; justify-content: center; gap: 8px; margin-top: 12px; }
   .ready .btn { margin-top: 0; }
+  .create { display: grid; gap: 8px; margin-top: 12px; }
   .idle-time { margin-top: 8px; font-size: 13px; color: var(--gold); }
   .modes { display: flex; flex-wrap: wrap; justify-content: center; gap: 6px; margin-top: 12px; }
   .skins { display: flex; flex-direction: column; gap: 6px; padding: 8px 16px 0; }
@@ -223,6 +224,10 @@
     </div>
     <button class="accept" id="queue" type="button" hidden>Queue up</button>
     <button class="btn" id="cancel" type="button" hidden>Cancel search</button>
+    <div class="create" id="create" hidden>
+      <select class="search" id="create-mode" aria-label="Mode for the new lobby"></select>
+      <button class="accept" id="create-lobby" type="button">Create lobby</button>
+    </div>
     <div class="modes" id="modes" hidden></div>
     <button class="btn" id="leave" type="button" hidden>Leave lobby</button>
     <p class="msg" id="idle-msg" role="status"></p>
@@ -314,7 +319,7 @@
   // Outside champ select: the header, by client phase.
   const LOBBY = { None: "Not in a lobby", Lobby: "In a lobby", Matchmaking: "In queue", ReadyCheck: "Match found" };
   const IDLE_TEXT = {
-    None: "Open a lobby in the client to queue up here.",
+    None: "Create a lobby here, or open one in the client, to queue up.",
     Lobby: "Ready to queue.",
     Matchmaking: "Searching for a match.",
   };
@@ -489,6 +494,18 @@
     }));
   }
 
+  // On the home screen: a mode to open a new lobby in, as the client's Create lobby does.
+  function renderCreate(s) {
+    const modes = s.createModes || [];
+    $("create").hidden = s.phase !== "None";
+    $("create-lobby").disabled = !modes.length;
+    paint($("create-mode"), modes, () => modes.map((m) => {
+      const option = el("option", m.name);
+      option.value = String(m.id);
+      return option;
+    }));
+  }
+
   // Outside champ select: the lobby, the queue and a found match.
   function renderIdle(s) {
     const rc = s.readyCheck;
@@ -501,6 +518,7 @@
     $("decline").disabled = answered;
     $("queue").hidden = s.phase !== "Lobby";
     $("cancel").hidden = s.phase !== "Matchmaking";
+    renderCreate(s);
     renderModes(s);
     tickIdle();
   }
@@ -941,6 +959,8 @@
   $("decline").onclick = () => act("/api/decline", {}, $("idle-msg"), "Declined.");
   $("queue").onclick = () => act("/api/queue", {}, $("idle-msg"), "Queued up.");
   $("cancel").onclick = () => act("/api/cancel", {}, $("idle-msg"), "Search cancelled.");
+  $("create-lobby").onclick = () =>
+    act("/api/lobby", { queueId: Number($("create-mode").value) }, $("idle-msg"), "Lobby created.");
   // Leaving the lobby takes two taps, so one stray tap does not close it.
   let leaveArmed = null;
   $("leave").onclick = () => {

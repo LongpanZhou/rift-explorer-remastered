@@ -4,6 +4,7 @@ import { invokeJson, messageFor, type SidecarError } from "../errors";
 import { formatDuration, queueName, summarize, type Game } from "./summary";
 import { safeCount, safeWorth, summarizeLoot, worth, type LootItem } from "./loot";
 import { fillerFor, LINE_INDENT, NBSP } from "./width";
+import { asciiRows, cellLuminance, fitsStatusBox, padArt } from "./asciiArt";
 import { encodeText, joinClientLines, splitClientLines, toClientText } from "../../app/util/text";
 import StatusError from "../StatusError";
 import PhonePanel from "./PhonePanel";
@@ -147,8 +148,8 @@ function loadAuto(): AutoSettings {
 }
 const idList = (ids: number[]) => (ids.length ? ids.join("-") : "none");
 
-/** The ASCII art tool is hidden for now. Set to true to show its button and panel again. */
-const ASCII_ART_ENABLED = false;
+/** The ASCII art button sits next to the status message. Set to false to hide it. */
+const ASCII_ART_ENABLED = true;
 
 export default function Player({ active = true }: { active?: boolean }) {
   const [profile, setProfile] = useState<Profile | null>(null);
@@ -1447,45 +1448,28 @@ function StatusMessage(props: { value: string; busy: boolean; save: (m: string) 
   );
 }
 
-/** Art is always 40 "#" wide: the client fits 44, so 40 leaves room for the curly quote on the edge rows. */
-const ASCII_COLS = 40;
+/** The most characters across the slider. Wider art can be previewed, but the status box fits about 40. */
+const ASCII_MAX_COLS = 60;
+/** The width the picture starts at: the most the status box fits. */
+const ASCII_DEFAULT_COLS = 40;
 
-/** Drop a picture, pick its width, preview it as ASCII, and set it as your status. */
+/** Drop a picture, choose its width and shading, preview it as ASCII, and set it as your status. */
 function AsciiArt(props: { busy: boolean; setStatus: (text: string) => void }) {
-  const cols = ASCII_COLS;
+  const [cols, setCols] = useState(ASCII_DEFAULT_COLS);
   const [invert, setInvert] = useState(false);
   const [img, setImg] = useState<HTMLImageElement | null>(null);
   const [name, setName] = useState("");
-  const [art, setArt] = useState<string[] | null>(null);
   const [drag, setDrag] = useState(false);
   const fileRef = useRef<HTMLInputElement>(null);
 
-  useEffect(() => {
-    if (!img) return;
+  const art = useMemo(() => {
+    if (!img) return null;
     // A character cell is about twice as tall as it is wide, so halve the row count.
     const rows = Math.max(4, Math.round((cols * img.naturalHeight) / img.naturalWidth / 2));
-    const canvas = document.createElement("canvas");
-    canvas.width = cols;
-    canvas.height = rows;
-    const ctx = canvas.getContext("2d");
-    if (!ctx) return;
-    ctx.fillStyle = "#fff";
-    ctx.fillRect(0, 0, cols, rows);
-    // Fit the picture inside the grid, keeping its proportions.
-    const scale = Math.min(cols / img.naturalWidth, rows / img.naturalHeight);
-    const w = img.naturalWidth * scale;
-    const h = img.naturalHeight * scale;
-    ctx.imageSmoothingQuality = "high";
-    ctx.drawImage(img, (cols - w) / 2, (rows - h) / 2, w, h);
-    // jscii is loaded only when the panel opens, so the rest of the app does not depend on it.
-    let cancelled = false;
-    import("./asciiCanvas").then(({ asciiFromCanvas }) => {
-      if (!cancelled) setArt(asciiFromCanvas(canvas, cols, rows, invert));
-    });
-    return () => {
-      cancelled = true;
-    };
+    return padArt(asciiRows(cellLuminance(img, cols, rows), cols, invert));
   }, [img, cols, invert]);
+  // A row wider than the status box would wrap onto a second line in the client, so it cannot be set.
+  const tooWide = !!art && !fitsStatusBox(art);
 
   const load = (file: File | undefined) => {
     if (!file || !file.type.startsWith("image/")) return;
@@ -1519,18 +1503,20 @@ function AsciiArt(props: { busy: boolean; setStatus: (text: string) => void }) {
         <input ref={fileRef} type="file" accept="image/*" hidden onChange={(e) => load(e.target.files?.[0])} />
       </div>
 
+      <label className="ascii-option">
+        Characters wide: {cols}
+        <input type="range" min={10} max={ASCII_MAX_COLS} value={cols} onChange={(e) => setCols(Number(e.target.value))} />
+      </label>
       <label className="auto-toggle">
         <input type="checkbox" checked={invert} onChange={(e) => setInvert(e.target.checked)} />
         Invert (light becomes dark)
       </label>
 
-      {art && (
+      {art && art.length > 0 && (
         <>
           <pre className="ascii-preview">{art.join("\n")}</pre>
-          <p className="fine">
-            Each row is {cols} '#' wide, which fits on one row in the client.
-          </p>
-          <button disabled={props.busy} onClick={() => props.setStatus(joinClientLines(art))}>
+          {tooWide && <p className="msg bad">Some rows are too wide for the status box. Choose a smaller width.</p>}
+          <button disabled={props.busy || tooWide} onClick={() => props.setStatus(joinClientLines(art))}>
             Set as my status
           </button>
         </>
