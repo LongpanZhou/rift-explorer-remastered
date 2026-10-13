@@ -712,3 +712,38 @@ test("a known rune icon is served as a PNG, fetched from CommunityDragon", async
   expect(res.headers.get("content-type")).toBe("image/png");
   expect(s.dragon.urls).toContain("https://raw.communitydragon.org/latest/plugins/rcp-be-lol-game-data/global/default/v1/perk-images/8005.png");
 });
+
+// Data Dragon is on the internet. A slow or failing Data Dragon must never hold up the phone's
+// 2 s updates: that made the phone report "Connection lost".
+function slowDragon(delayMs: number, down: boolean) {
+  const urls: string[] = [];
+  const good = ddragon();
+  const fetch = async (url: string) => {
+    urls.push(url);
+    await Bun.sleep(delayMs);
+    return down ? new Response("down", { status: 503 }) : good.fetch(url);
+  };
+  return { fetch, urls };
+}
+
+test("a slow Data Dragon does not hold up an update; the spells appear once they arrive", async () => {
+  const dragon = slowDragon(600, false);
+  const { client } = fakeClient(world([[turnPick]]));
+  let t = Date.now();
+  const first: any = await phoneState(client, dragon.fetch);
+  expect(Date.now() - t).toBeLessThan(500);
+  expect(first.spellList).toEqual([]);
+  await Bun.sleep(1400); // two requests of 600 ms, one after the other
+  t = Date.now();
+  const later: any = await phoneState(client, dragon.fetch);
+  expect(Date.now() - t).toBeLessThan(100);
+  expect(later.spellList.map((s: any) => s.name)).toEqual(["Flash", "Ignite"]);
+});
+
+test("a failing Data Dragon is not asked again on every update", async () => {
+  const dragon = slowDragon(0, true);
+  const { client } = fakeClient(world([[turnPick]]));
+  for (let i = 0; i < 5; i++) expect(((await phoneState(client, dragon.fetch)) as any).spellList).toEqual([]);
+  // One attempt (the version list fails, so the spell list is never asked for); not one per update.
+  expect(dragon.urls).toHaveLength(1);
+});

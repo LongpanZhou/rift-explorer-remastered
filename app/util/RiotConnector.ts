@@ -1,6 +1,6 @@
 import path from "path";
 import { EventEmitter } from "events";
-import { exec } from "child_process";
+import { exec, execFile } from "child_process";
 import { normalize, join } from "path";
 import { existsSync, readFileSync } from "fs-extra";
 import { FSWatcher, watch } from "chokidar";
@@ -31,6 +31,18 @@ const IS_WIN: boolean = platform() === "win32";
 const RIOTCLIENT_PROCESS: string = IS_WIN
   ? "RiotClientServices.exe"
   : "RiotClientServices";
+
+/**
+ * Runs a process lookup. On Windows it is PowerShell without the user's profile and without
+ * prompts, which starts several times faster than a plain `powershell` shell.
+ */
+function lookup(command: string, done: (error: Error | null, stdout: string, stderr: string) => void) {
+  if (IS_WIN) {
+    execFile("powershell.exe", ["-NoProfile", "-NonInteractive", "-Command", command], { windowsHide: true }, done);
+  } else {
+    exec(command, done);
+  }
+}
 
 /**
  * Connector which allows us to check for the league and riot client.
@@ -67,17 +79,7 @@ export default class RiotConnector extends EventEmitter {
       ? `(Get-CimInstance Win32_Process -Filter "name = '${RIOTCLIENT_PROCESS}'").CommandLine`
       : `ps x -o command= | grep '${RIOTCLIENT_PROCESS}'`;
 
-    /**
-     * Get options for exec based on platform.
-     */
-    const execOptions: { shell?: string } = IS_WIN
-      ? { shell: `powershell` }
-      : {};
-
-    /**
-     * Execute the command
-     */
-    exec(command, execOptions, (error, stdout, stderr) => {
+    lookup(command, (error, stdout, stderr) => {
       if (error || !stdout || stderr) {
         return;
       }
@@ -164,9 +166,7 @@ export default class RiotConnector extends EventEmitter {
     const command = IS_WIN
       ? `(Get-CimInstance Win32_Process -Filter "name = 'LeagueClient.exe'").ExecutablePath`
       : `ps x -o command= | grep 'LeagueClient.app/Contents/MacOS/LeagueClient' | grep -v grep`;
-    const execOptions: { shell?: string } = IS_WIN ? { shell: `powershell` } : {};
-
-    exec(command, execOptions, (error, stdout) => {
+    lookup(command, (error, stdout) => {
       if (error || !stdout) return;
       const match = IS_WIN
         ? stdout.match(/(.*)\\LeagueClient\.exe/i)

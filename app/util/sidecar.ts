@@ -1,5 +1,5 @@
-import { existsSync } from "fs";
-import { homedir } from "os";
+import { existsSync, readFileSync, writeFileSync } from "fs";
+import { homedir, tmpdir } from "os";
 import { join } from "path";
 import { EXIT } from "./exitCodes";
 import { ActionRefused } from "./player";
@@ -55,9 +55,34 @@ export function classify(err: any): { code: number; message: string } {
  * code and message when none is found.
  */
 export async function findLockfile(explicit?: string): Promise<string> {
-  const path = explicit ?? DEFAULT_LOCKFILES.find((p) => existsSync(p)) ?? (await discoverLockfile());
+  const path = explicit ?? DEFAULT_LOCKFILES.find((p) => existsSync(p)) ?? rememberedLockfile() ?? remember(await discoverLockfile());
   if (!existsSync(path)) {
     throw { code: EXIT.LOCKFILE_MISSING, message: `lockfile not found at ${path}` };
+  }
+  return path;
+}
+
+/**
+ * Where the last process lookup found the lockfile. The lookup starts PowerShell on Windows, which
+ * takes seconds; the install folder does not move, so later runs read it from here. The lockfile
+ * exists only while the client runs, so a remembered path that has no lockfile is not used.
+ */
+export const REMEMBERED_LOCKFILE = join(tmpdir(), "rift-explorer-lockfile-path.txt");
+
+function rememberedLockfile(): string | undefined {
+  try {
+    const path = readFileSync(REMEMBERED_LOCKFILE, "utf8").trim();
+    return path && existsSync(path) ? path : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+function remember(path: string): string {
+  try {
+    writeFileSync(REMEMBERED_LOCKFILE, path);
+  } catch {
+    // Only a speed-up: a run that cannot write it looks the client up again next time.
   }
   return path;
 }

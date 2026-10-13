@@ -5,7 +5,7 @@
 import { ActionRefused, awaitingAnswer, lcuClient, openAction, PAGES, takenBy, type LcuClient } from "./player";
 import type { LockFile } from "./LockFileParser";
 import PHONE_HTML from "./phone-page.html" with { type: "text" };
-import { championIcon, skinArt, spellIcon, summonerSpells, type Fetcher } from "./phoneIcons";
+import { championIcon, skinArt, spellIcon, summonerSpellsSoon, type Fetcher } from "./phoneIcons";
 import { runeData, runeIcon, saveRunePage } from "./phoneRunes";
 
 /** The page's text. Bun's own types read an .html import as a bundle; `type: "text"` makes it a string. */
@@ -193,7 +193,8 @@ export async function phoneState(client: LcuClient, fetchFn?: Fetcher) {
     lockedIn(me) ? client.get(SWAP_PATHS.champion).catch(() => []) : [],
     lockedIn(me) ? [] : client.get(SWAP_PATHS["pick-order"]).catch(() => []),
     client.get(PAGES).catch(() => null),
-    summonerSpells(fetchFn).catch(() => []),
+    // From Data Dragon on the internet: never allowed to hold up an update.
+    summonerSpellsSoon(fetchFn),
     disallowedSpells(client, session),
     skinOffers(client),
   ]);

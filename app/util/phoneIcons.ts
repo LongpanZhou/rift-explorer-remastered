@@ -24,10 +24,17 @@ let version: { at: number; value: string } | null = null;
 let spellCache: { at: number; list: SummonerSpell[] } | null = null;
 const icons = new Map<string, ArrayBuffer>();
 
+/** The spell list being fetched in the background, and when the last fetch failed. */
+let spellLoad: Promise<void> | null = null;
+let spellFailedAt = 0;
+const SPELL_RETRY_MS = 60_000;
+
 /** Forgets the cached version, spells and icons (used by tests). */
 export function resetIconCache() {
   version = null;
   spellCache = null;
+  spellLoad = null;
+  spellFailedAt = 0;
   icons.clear();
 }
 
@@ -94,4 +101,27 @@ export async function summonerSpells(fetchFn: Fetcher = liveFetch): Promise<Summ
     }));
   spellCache = { at: Date.now(), list };
   return list;
+}
+
+/**
+ * The spell list for the phone's 2 s updates, which must never wait on the internet. A missing or
+ * day-old list is fetched in the background; this waits for it at most `waitMs`, then answers with
+ * what it has (the old list, or none). A failed fetch is not tried again for a minute.
+ */
+export async function summonerSpellsSoon(fetchFn: Fetcher = liveFetch, waitMs = 300): Promise<SummonerSpell[]> {
+  const fresh = spellCache && Date.now() - spellCache.at < DAY_MS;
+  if (!fresh && !spellLoad && Date.now() - spellFailedAt > SPELL_RETRY_MS) {
+    spellLoad = summonerSpells(fetchFn)
+      .then(
+        () => undefined,
+        () => {
+          spellFailedAt = Date.now();
+        }
+      )
+      .finally(() => {
+        spellLoad = null;
+      });
+  }
+  if (spellLoad) await Promise.race([spellLoad, new Promise((r) => setTimeout(r, waitMs))]);
+  return spellCache?.list ?? [];
 }
