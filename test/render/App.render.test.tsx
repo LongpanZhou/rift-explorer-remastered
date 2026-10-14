@@ -24,6 +24,7 @@ const spec = {
 };
 
 mock.module("@tauri-apps/api/core", () => ({
+  convertFileSrc: (path: string) => path,
   invoke: async (cmd: string) => {
     if (cmd === "player") throw { code: 2, message: "not running" };
     if (cmd !== "get_spec") throw new Error(`unexpected command ${cmd}`);

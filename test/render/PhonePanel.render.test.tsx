@@ -13,6 +13,7 @@ import { createRoot, type Root } from "react-dom/client";
 let health: { state: string; reason: string }[] = [];
 const calls: string[] = [];
 mock.module("@tauri-apps/api/core", () => ({
+  convertFileSrc: (path: string) => path,
   invoke: async (cmd: string) => {
     calls.push(cmd);
     if (cmd === "phone_lan_ip") return "192.168.1.20";

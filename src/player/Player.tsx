@@ -1,11 +1,11 @@
-import { memo, useDeferredValue, useEffect, useMemo, useRef, useState } from "react";
+import { memo, useCallback, useDeferredValue, useEffect, useMemo, useRef, useState } from "react";
 import type { ReactNode } from "react";
 import { invokeJson, messageFor, type SidecarError } from "../errors";
 import { formatDuration, queueName, summarize, type Game } from "./summary";
 import { safeCount, safeWorth, summarizeLoot, worth, type LootItem } from "./loot";
 import { fillerFor, LINE_INDENT, NBSP } from "./width";
 import { fitsStatusBox, padArt } from "./asciiArt";
-import { invoke } from "@tauri-apps/api/core";
+import { convertFileSrc, invoke } from "@tauri-apps/api/core";
 import { encodeText, joinClientLines, splitClientLines, toClientText } from "../../app/util/text";
 import StatusError from "../StatusError";
 import PhonePanel from "./PhonePanel";
@@ -28,8 +28,20 @@ interface Item {
   id: number;
   title?: string;
   name?: string;
+  /** A skin's champion. */
+  champion?: string;
   owned: boolean;
 }
+
+const collate = new Intl.Collator().compare;
+/** The orders the skin grid can sort by. The first is the order the list comes in. */
+const SKIN_ORDERS = [
+  { label: "Name", compare: (a: Item, b: Item) => collate(a.name ?? "", b.name ?? "") },
+  {
+    label: "Champion",
+    compare: (a: Item, b: Item) => collate(a.champion ?? "", b.champion ?? "") || collate(a.name ?? "", b.name ?? ""),
+  },
+];
 
 type Reward = PendingReward;
 
@@ -194,6 +206,15 @@ export default function Player({ active = true }: { active?: boolean }) {
     if (section === "phone") setAuto((a) => (a.enabled ? { ...a, enabled: false } : a));
   }, [section]);
   const [ddVersion, setDdVersion] = useState("");
+  // The profile icons, copied from the client into the app's cache folder. `missing` lists the
+  // ids the client had no picture for.
+  const [icons, setIcons] = useState<{ dir: string; missing: number[] } | null>(null);
+  // The skin loading pictures are copied as the Background tab shows them. `cached` lists the ones
+  // copied so far; `skinWanted` lists the skins that have come near the screen.
+  const [skinArt, setSkinArt] = useState<{ dir: string; cached: Set<number> } | null>(null);
+  const [skinWanted, setSkinWanted] = useState<number[]>([]);
+  const skinAsked = useRef(new Set<number>());
+  const wantSkin = useCallback((id: number) => setSkinWanted((w) => (w.includes(id) ? w : [...w, id])), []);
   const profileRef = useRef<Profile | null>(null);
   profileRef.current = profile;
 
@@ -220,6 +241,28 @@ export default function Player({ active = true }: { active?: boolean }) {
     for (const [name, loaded, cmd, set] of lazy) if (section === name && !loaded) fetchInto(cmd, set);
   }, [section, challenges, rewards, loot, runes]);
   const reloadRunes = () => fetchInto("runes", setRunes);
+  // The icons are copied on the first visit to the Icon tab. Later visits only find the copies.
+  useEffect(() => {
+    if (section === "icon" && icons === null) invokeJson<{ dir: string; missing: number[] }>("icon_cache").then(setIcons).catch(setError);
+  }, [section, icons]);
+  // Each new batch of skins that came near the screen is copied once, after a short pause.
+  useEffect(() => {
+    const fresh = skinWanted.filter((id) => !skinAsked.current.has(id));
+    if (fresh.length === 0) return;
+    const timer = setTimeout(() => {
+      fresh.forEach((id) => skinAsked.current.add(id));
+      invokeJson<{ dir: string; missing: number[] }>("skin_cache", { ids: fresh })
+        .then((r) => {
+          const missing = new Set(r.missing);
+          setSkinArt((cur) => ({
+            dir: r.dir,
+            cached: new Set([...(cur?.cached ?? []), ...fresh.filter((id) => !missing.has(id))]),
+          }));
+        })
+        .catch(setError);
+    }, 150);
+    return () => clearTimeout(timer);
+  }, [skinWanted]);
 
   /**
    * Runs a write. On success, patches the loaded data instead of reloading it:
@@ -275,8 +318,16 @@ export default function Player({ active = true }: { active?: boolean }) {
   if (!profile) return <p className="status">Loading your profile...</p>;
 
   const iconUrl = (id: number) => (ddVersion ? `${DD}/${ddVersion}/img/profileicon/${id}.png` : "");
+  // The grid shows the copies in the cache folder, which load from disk.
+  const iconFile = (id: number) => (icons && !icons.missing.includes(id) ? convertFileSrc(`${icons.dir}/${id}.jpg`) : "");
   const champ = (id: number) => profile.champions[id];
   const avatar = iconUrl(profile.summoner.profileIconId);
+  // Data Dragon's loading picture of a skin: the fallback when the client's copy is missing.
+  const loadingArt = (id: number) => {
+    const alias = champ(Math.floor(id / 1000))?.alias;
+    return alias ? `${DD}/img/champion/loading/${alias}_${id % 1000}.jpg` : "";
+  };
+  const skinFile = (id: number) => (skinArt?.cached.has(id) ? convertFileSrc(`${skinArt.dir}/${id}.jpg`) : "");
 
   return (
     <div className="player">
@@ -349,28 +400,32 @@ export default function Player({ active = true }: { active?: boolean }) {
       {notice && <p className="notice">{notice}</p>}
 
       {section === "overview" && <Overview profile={profile} champ={champ} />}
-      {section === "icon" && (
-        <CatalogGrid
-          kind="icons"
-          items={profile.icons}
-          current={profile.summoner.profileIconId}
-          busy={busy}
-          lockedClickable={false}
-          intro="Click an owned icon to use it; locked icons are not owned."
-          placeholder="Search name or ID"
-          matches={(i, t) => String(i.id).includes(t) || (i.title ?? "").toLowerCase().includes(t)}
-          image={iconUrl}
-          label={(i) => `${i.title || "Icon"} (${i.id})`}
-          onDownload={(i) => download("icon", i.id)}
-          onPick={(i) =>
-            act(
-              ["set-icon", String(i.id)],
-              `Icon changed to ${i.id}.`,
-              patchSummoner({ profileIconId: i.id })
-            )
-          }
-        />
-      )}
+      {section === "icon" &&
+        (icons ? (
+          <CatalogGrid
+            kind="icons"
+            items={profile.icons}
+            current={profile.summoner.profileIconId}
+            busy={busy}
+            lockedClickable={false}
+            intro="Click an owned icon to use it; locked icons are not owned."
+            placeholder="Search name or ID"
+            matches={(i, t) => String(i.id).includes(t) || (i.title ?? "").toLowerCase().includes(t)}
+            image={iconFile}
+            fallback={iconUrl}
+            label={(i) => `${i.title || "Icon"} (${i.id})`}
+            onDownload={(i) => download("icon", i.id)}
+            onPick={(i) =>
+              act(
+                ["set-icon", String(i.id)],
+                `Icon changed to ${i.id}.`,
+                patchSummoner({ profileIconId: i.id })
+              )
+            }
+          />
+        ) : (
+          <p className="muted">Copying icons from the client...</p>
+        ))}
       {section === "border" && (
         <RegaliaPicker
           regalia={profile.regalia}
@@ -396,10 +451,10 @@ export default function Player({ active = true }: { active?: boolean }) {
           intro="Any skin can be your profile background; the lock marks skins you do not own."
           placeholder="Search skins"
           matches={(s, t) => (s.name ?? "").toLowerCase().includes(t)}
-          image={(id) => {
-            const alias = champ(Math.floor(id / 1000))?.alias;
-            return alias ? `${DD}/img/champion/loading/${alias}_${id % 1000}.jpg` : "";
-          }}
+          image={skinFile}
+          fallback={loadingArt}
+          onVisible={wantSkin}
+          orders={SKIN_ORDERS}
           label={(s) => s.name ?? ""}
           caption
           onDownload={(s) => download("skin", s.id)}
@@ -567,22 +622,30 @@ function CatalogGrid(props: {
   placeholder: string;
   matches: (item: Item, term: string) => boolean;
   image: (id: number) => string;
+  /** Tried once when `image` fails to load. */
+  fallback?: (id: number) => string;
+  /** Called once for a tile when it comes near the screen. */
+  onVisible?: (id: number) => void;
+  /** Orders the grid can be sorted by; the first is the default. */
+  orders?: typeof SKIN_ORDERS;
   label: (item: Item) => string;
   caption?: boolean;
   onPick: (item: Item) => void;
   onDownload: (item: Item) => void;
 }) {
   const [q, setQ] = useState("");
-  const [ownedOnly, setOwnedOnly] = useState(false);
+  // The icon list opens on the owned icons: the unowned ones make it slow to load.
+  const [ownedOnly, setOwnedOnly] = useState(props.kind === "icons");
+  const [order, setOrder] = useState(0);
   // Filtering thousands of items per keystroke is deferred so typing stays smooth.
   const term = useDeferredValue(q.trim().toLowerCase());
   const { items, matches } = props;
-  const shown = useMemo(
-    () => items.filter((i) => (!ownedOnly || i.owned) && (!term || matches(i, term))),
+  const shown = useMemo(() => {
+    const picked = items.filter((i) => (!ownedOnly || i.owned) && (!term || matches(i, term)));
+    return props.orders ? picked.sort(props.orders[order].compare) : picked;
     // `matches` is recreated each render but depends only on the item and term.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [items, term, ownedOnly]
-  );
+  }, [items, term, ownedOnly, order]);
   const ownedCount = useMemo(() => items.filter((i) => i.owned).length, [items]);
 
   return (
@@ -594,6 +657,18 @@ function CatalogGrid(props: {
           <input type="checkbox" checked={ownedOnly} onChange={(e) => setOwnedOnly(e.target.checked)} />
           Owned only ({ownedCount} of {items.length})
         </label>
+        {props.orders && (
+          <label className="owned-filter">
+            Sort by{" "}
+            <select value={order} onChange={(e) => setOrder(Number(e.target.value))}>
+              {props.orders.map((o, n) => (
+                <option key={o.label} value={n}>
+                  {o.label}
+                </option>
+              ))}
+            </select>
+          </label>
+        )}
       </p>
       <div className={`grid ${props.kind}`}>
         {shown.map((i) => (
@@ -604,6 +679,8 @@ function CatalogGrid(props: {
             on={i.id === props.current}
             disabled={props.busy || i.id === props.current || (!i.owned && !props.lockedClickable)}
             src={props.image(i.id)}
+            fallback={props.fallback?.(i.id)}
+            onVisible={props.onVisible}
             label={props.label(i)}
             caption={props.caption}
             onPick={props.onPick}
@@ -620,20 +697,48 @@ const Tile = memo(function Tile(p: {
   on: boolean;
   disabled: boolean;
   src: string;
+  /** Used once if `src` fails to load. */
+  fallback?: string;
+  onVisible?: (id: number) => void;
   label: string;
   caption?: boolean;
   onPick: (item: Item) => void;
   onDownload: (item: Item) => void;
 }) {
+  // Tries the pictures in order (`src`, then `fallback`), skipping each one that fails to load.
+  const [failed, setFailed] = useState<string[]>([]);
+  const src = [p.src, p.fallback].find((s) => s && !failed.includes(s)) ?? "";
+  // Reports the tile once, when it is about to scroll into view.
+  const near = useRef<HTMLDivElement>(null);
+  const { onVisible } = p;
+  const id = p.item.id;
+  useEffect(() => {
+    const el = near.current;
+    if (!onVisible || !el) return;
+    const watch = new IntersectionObserver(
+      (entries) => {
+        if (!entries.some((e) => e.isIntersecting)) return;
+        watch.disconnect();
+        onVisible(id);
+      },
+      { rootMargin: "400px" }
+    );
+    watch.observe(el);
+    return () => watch.disconnect();
+  }, [onVisible, id]);
   return (
-    <div className="tile-wrap">
+    <div className="tile-wrap" ref={near}>
       <button
         className={`tile ${p.on ? "on" : ""} ${p.item.owned ? "" : "locked"}`}
         disabled={p.disabled}
         onClick={() => p.onPick(p.item)}
         title={p.item.owned ? p.label : `${p.label} - not owned`}
       >
-        {p.src ? <img src={p.src} alt={p.caption ? "" : p.label} loading="lazy" /> : !p.caption && p.item.id}
+        {src ? (
+          <img src={src} alt={p.caption ? "" : p.label} loading="lazy" onError={() => setFailed((f) => [...f, src])} />
+        ) : (
+          !p.caption && p.item.id
+        )}
         {p.caption && <span>{p.label}</span>}
       </button>
       <button className="dl" title={`Download ${p.label}`} onClick={() => p.onDownload(p.item)}>
@@ -643,7 +748,7 @@ const Tile = memo(function Tile(p: {
   );
 },
 // onPick is a new closure each render but always does the same thing for an item.
-(a, b) => a.item === b.item && a.on === b.on && a.disabled === b.disabled && a.src === b.src);
+(a, b) => a.item === b.item && a.on === b.on && a.disabled === b.disabled && a.src === b.src && a.fallback === b.fallback && a.onVisible === b.onVisible);
 
 function RegaliaPicker(props: {
   regalia: Profile["regalia"];

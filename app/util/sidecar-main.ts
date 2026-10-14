@@ -11,6 +11,8 @@ import {
   setTokens,
   ActionRefused,
   downloadAsset,
+  cacheIcons,
+  cacheSkinArt,
   loadRewards,
   claimReward,
   claimAllRewards,
@@ -71,6 +73,10 @@ const COMMANDS: Record<string, Command> = {
   "buy-rune-page": (c, r) => buyRunePage(c, r[0] ?? ""),
   // icon|skin <id>; saves to ~/Downloads/Rift Explorer
   download: (c, r) => downloadAsset(c, r[0], Number(r[1])),
+  // <folder>; copies the client's profile icons there. The app passes the folder.
+  "icon-cache": (c, r) => cacheIcons(c, r[0] ?? ""),
+  // <folder> <skinId ...>; copies those skins' loading pictures there.
+  "skin-cache": (c, r) => cacheSkinArt(c, r[0] ?? "", r.slice(1).map(Number)),
   // <iconId>
   "set-icon": (c, r) => written(() => setIcon(c, Number(r[0]))),
   // <crestType> <bannerType> <prestigeCrest>
@@ -119,11 +125,11 @@ async function main(): Promise<void> {
     fail(err.code ?? EXIT.REQUEST_FAILED, err.message ?? String(err))
   );
   const lock: LockFile = await parse(lockfilePath).catch((err: any) => fail(EXIT.LOCKFILE_MALFORMED, err.message));
-  // "serve <port>" runs the phone page until the app stops it.
+  // "serve <port> <token>" runs the phone page until the app stops it.
   if (positional[0] === "serve") {
     const port = Number(positional[1]);
     try {
-      await servePhone(lock, port);
+      await servePhone(lock, port, positional[2] ?? "");
     } catch (err: any) {
       const busy = err?.code === "EADDRINUSE" || /in use/i.test(String(err?.message));
       fail(EXIT.REQUEST_FAILED, busy ? `port ${port} is already in use. Close the other program using it, or restart the app.` : String(err?.message ?? err));

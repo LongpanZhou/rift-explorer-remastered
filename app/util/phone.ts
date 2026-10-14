@@ -516,15 +516,37 @@ export async function handlePhone(req: Request, deps: PhoneDeps): Promise<Respon
 }
 
 /**
- * Runs the phone server on the local network until the process is stopped. The app waits
- * for the `phone page on port` line on stderr before it shows the QR code.
+ * Lets a request reach the phone page only with the token from the QR code. The first visit
+ * (`?t=<token>` on the link) sets a cookie and redirects to the page; after that the cookie
+ * lets requests through. Ping stays open, so the app can see the server is up. Returns the
+ * reply to send instead of the page, or null to let the request through.
  */
-export function servePhone(lock: LockFile, port: number): Promise<never> {
+export function phoneAccess(req: Request, token: string): Response | null {
+  const url = new URL(req.url);
+  if (url.pathname === "/api/ping") return null;
+  if (url.searchParams.get("t") === token) {
+    return new Response(null, {
+      status: 302,
+      headers: { Location: "/", "Set-Cookie": `phone=${token}; Path=/; HttpOnly; SameSite=Strict` },
+    });
+  }
+  const cookies = (req.headers.get("cookie") ?? "").split(";").map((c) => c.trim());
+  if (cookies.includes(`phone=${token}`)) return null;
+  return new Response("Scan the QR code in the app to open the phone page.", { status: 403 });
+}
+
+/**
+ * Runs the phone server on the local network until the process is stopped. The app waits
+ * for the `phone page on port` line on stderr before it shows the QR code. `token` is the
+ * 32 hex characters in the QR code's link.
+ */
+export function servePhone(lock: LockFile, port: number, token: string): Promise<never> {
+  if (!/^[0-9a-f]{32}$/.test(token)) throw new Error("the phone token must be 32 hex characters");
   const client = lcuClient(lock);
   Bun.serve({
     hostname: "0.0.0.0",
     port,
-    fetch: (req) => handlePhone(req, { client }),
+    fetch: (req) => phoneAccess(req, token) ?? handlePhone(req, { client }),
   });
   console.error(`phone page on port ${port}`);
   return new Promise(() => {});

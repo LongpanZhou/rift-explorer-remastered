@@ -1,8 +1,8 @@
 import axios from "axios";
-import { mkdir, writeFile } from "fs/promises";
+import { mkdir, readdir, rename, writeFile } from "fs/promises";
 import { Agent } from "https";
 import { homedir } from "os";
-import { join } from "path";
+import { isAbsolute, join } from "path";
 import type { LockFile } from "./LockFileParser";
 import { LEVELS_PER_CREST, TOKEN_LIMIT } from "./rules";
 
@@ -76,9 +76,14 @@ export function usable(item: any): boolean {
   );
 }
 
+/** Icons the account may use although the inventory does not list them: 50 to 78, and 500. Chosen by hand. */
+export const EXTRA_ICONS: number[] = [...Array.from({ length: 29 }, (_, i) => 50 + i), 500];
+
 async function ownedIds(client: LcuClient, type: string): Promise<Set<number>> {
   const items: any[] = await client.get(`/lol-inventory/v2/inventory/${type}`);
-  return new Set(items.filter(usable).map((i) => i.itemId));
+  const ids = new Set<number>(items.filter(usable).map((i) => i.itemId));
+  if (type === "SUMMONER_ICON") for (const id of EXTRA_ICONS) ids.add(id);
+  return ids;
 }
 
 const CHAT_ME = "/lol-chat/v1/me";
@@ -214,11 +219,22 @@ export async function loadProfile(client: LcuClient) {
     backgroundSkinId: profile.backgroundSkinId,
     // Full catalogs. Unowned items are listed for browsing; the set-* actions
     // still refuse them.
-    icons: (iconCatalog as any[])
-      .map((i) => ({ id: i.id, title: i.title ?? "", owned: icons.has(i.id) }))
-      .sort((a, b) => b.id - a.id),
+    icons: [
+      ...(iconCatalog as any[]).map((i) => ({ id: i.id, title: i.title ?? "", owned: icons.has(i.id) })),
+      // Extra icons the catalog does not list. They have no title, so the grid shows only the id.
+      ...EXTRA_ICONS.filter((id) => !(iconCatalog as any[]).some((i) => i.id === id)).map((id) => ({
+        id,
+        title: "",
+        owned: true,
+      })),
+    ].sort((a, b) => b.id - a.id),
     skins: Object.values(skins as Record<string, any>)
-      .map((s) => ({ id: s.id, name: s.name, owned: ownedSkins.has(s.id) }))
+      .map((s) => ({
+        id: s.id,
+        name: s.name,
+        owned: ownedSkins.has(s.id),
+        champion: champions[Math.floor(s.id / 1000)]?.name ?? "",
+      }))
       .sort((a, b) => byName(a.name, b.name)),
   };
 }
@@ -372,6 +388,77 @@ export async function downloadAsset(
   const path = join(dir, name);
   await writeFile(path, bytes);
   return { path };
+}
+
+/** Icons copied at once. The client answers locally, so a few in parallel is plenty. */
+const COPIES_AT_ONCE = 8;
+
+/**
+ * Copies client pictures into `dir`, one `<id>.jpg` per entry, so the app can show them from
+ * disk. Pictures already there are kept. Returns the folder and the ids that could not be copied.
+ */
+async function copyArt(
+  client: LcuClient,
+  dir: string,
+  entries: { id: number; path: string }[]
+): Promise<{ dir: string; missing: number[] }> {
+  if (!isAbsolute(dir)) throw new ActionRefused("the cache folder must be a full path");
+  await mkdir(dir, { recursive: true });
+  const have = new Set(await readdir(dir));
+  const todo = entries.filter((e) => !have.has(`${e.id}.jpg`));
+  const missing: number[] = [];
+  let next = 0;
+  const copy = async () => {
+    while (next < todo.length) {
+      const { id, path } = todo[next++];
+      // An entry without a path has no picture in the client.
+      if (!path) {
+        missing.push(id);
+        continue;
+      }
+      try {
+        const bytes = await client.getBytes(path);
+        // Written under another name first, so a copy cut short is never taken for a whole picture.
+        const part = join(dir, `${id}.jpg.part`);
+        await writeFile(part, bytes);
+        await rename(part, join(dir, `${id}.jpg`));
+      } catch {
+        missing.push(id);
+      }
+    }
+  };
+  await Promise.all(Array.from({ length: COPIES_AT_ONCE }, copy));
+  return { dir, missing };
+}
+
+/** Copies the profile icons (see `copyArt`). */
+export async function cacheIcons(client: LcuClient, dir: string): Promise<{ dir: string; missing: number[] }> {
+  const catalog: { id: number }[] = await client.get("/lol-game-data/assets/v1/summoner-icons.json");
+  return copyArt(
+    client,
+    dir,
+    catalog.map((i) => ({ id: i.id, path: `/lol-game-data/assets/v1/profile-icons/${i.id}.jpg` }))
+  );
+}
+
+/**
+ * Copies the loading-screen picture of each skin in `ids` (see `copyArt`). A skin without a
+ * picture, or an id that is not a skin, is listed as missing.
+ */
+export async function cacheSkinArt(
+  client: LcuClient,
+  dir: string,
+  ids: number[]
+): Promise<{ dir: string; missing: number[] }> {
+  const skins: Record<string, { id: number; loadScreenPath?: string }> = await client.get(
+    "/lol-game-data/assets/v1/skins.json"
+  );
+  const byId = new Map(Object.values(skins).map((s) => [s.id, s.loadScreenPath ?? ""]));
+  return copyArt(
+    client,
+    dir,
+    ids.map((id) => ({ id, path: byId.get(id) ?? "" }))
+  );
 }
 
 const GRANTS = "/lol-rewards/v1/grants";

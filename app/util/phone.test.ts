@@ -1,6 +1,6 @@
 import { beforeEach, expect, test } from "bun:test";
 import { ActionRefused, type LcuClient } from "./player";
-import { handlePhone, phoneCreateLobby, phoneDodge, phoneSwap, phoneCancelQueue, phoneChoose, phoneLeaveLobby, phoneMode, phoneQueue, phoneReadyCheck, phoneSkin, phoneSpells, phoneState, resetModeCache, type PhoneDeps } from "./phone";
+import { handlePhone, phoneAccess, phoneCreateLobby, phoneDodge, phoneSwap, phoneCancelQueue, phoneChoose, phoneLeaveLobby, phoneMode, phoneQueue, phoneReadyCheck, phoneSkin, phoneSpells, phoneState, resetModeCache, type PhoneDeps } from "./phone";
 import { resetIconCache } from "./phoneIcons";
 import { resetRuneIconCache } from "./phoneRunes";
 import { fakeClient } from "./fakeClient";
@@ -26,6 +26,21 @@ function ddragon(down = false) {
 }
 
 const MAC = "http://mac.local:8787";
+
+test("the phone page opens only with the token from the QR code; ping stays open", () => {
+  const token = "0123456789abcdef0123456789abcdef";
+  const at = (path: string, headers: Record<string, string> = {}) => new Request(`http://192.168.1.20:8787${path}`, { headers });
+  expect(phoneAccess(at("/"), token)?.status).toBe(403);
+  expect(phoneAccess(at("/api/state"), token)?.status).toBe(403);
+  expect(phoneAccess(at("/api/ping"), token)).toBeNull();
+  const first = phoneAccess(at(`/?t=${token}`), token);
+  expect(first?.status).toBe(302);
+  expect(first?.headers.get("location")).toBe("/");
+  expect(first?.headers.get("set-cookie")).toContain(`phone=${token}`);
+  expect(phoneAccess(at("/", { cookie: `phone=${token}` }), token)).toBeNull();
+  expect(phoneAccess(at("/", { cookie: "phone=0000" }), token)?.status).toBe(403);
+  expect(phoneAccess(at("/?t=0000"), token)?.status).toBe(403);
+});
 const PHASE = "/lol-gameflow/v1/gameflow-phase";
 const SESSION = "/lol-champ-select/v1/session";
 const PICKABLE = "/lol-champ-select/v1/pickable-champion-ids";

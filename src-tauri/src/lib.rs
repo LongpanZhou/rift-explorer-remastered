@@ -46,6 +46,32 @@ async fn player(app: tauri::AppHandle, args: Vec<String>) -> Result<String, Side
     run_sidecar(&app, full).await
 }
 
+/// Copies client pictures into `folder` of the app's cache folder, through the sidecar command
+/// `command` (see app/util/player.ts). The folder is chosen here, never by the page.
+async fn cache_art(app: tauri::AppHandle, command: &str, folder: &str, ids: &[u32]) -> Result<String, SidecarError> {
+    let dir = app
+        .path()
+        .app_cache_dir()
+        .map_err(|e| unavailable(format!("no cache folder: {e}")))?
+        .join(folder);
+    let mut args = vec!["player".to_string(), command.into(), dir.to_string_lossy().into_owned()];
+    args.extend(ids.iter().map(u32::to_string));
+    run_sidecar(&app, args).await
+}
+
+/// The profile icons, for the Icon tab.
+#[tauri::command]
+async fn icon_cache(app: tauri::AppHandle) -> Result<String, SidecarError> {
+    cache_art(app, "icon-cache", "profile-icons", &[]).await
+}
+
+/// The loading pictures of the skins with these ids, for the Background tab. Only the ones on
+/// screen are asked for.
+#[tauri::command]
+async fn skin_cache(app: tauri::AppHandle, ids: Vec<u32>) -> Result<String, SidecarError> {
+    cache_art(app, "skin-cache", "skin-art", &ids).await
+}
+
 /// Where the sidecar executable is. On macOS and Linux it is a separate file next to the app.
 #[cfg(not(windows))]
 fn sidecar_path(_app: &tauri::AppHandle) -> Result<std::path::PathBuf, SidecarError> {
@@ -260,14 +286,18 @@ const PHONE_START_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(
 /// page is listening, or with the sidecar's own message when it stops first (no
 /// client running, port in use).
 #[tauri::command]
-async fn phone_start(app: tauri::AppHandle, port: u16) -> Result<(), SidecarError> {
+async fn phone_start(app: tauri::AppHandle, port: u16, token: String) -> Result<(), SidecarError> {
     if port < 1024 {
         return Err(SidecarError { code: ACTION_REFUSED, message: "port must be 1024 or higher".into() });
+    }
+    // The token is the QR code's secret: 32 hex characters, from the page.
+    if token.len() != 32 || !token.chars().all(|c| c.is_ascii_hexdigit()) {
+        return Err(SidecarError { code: ACTION_REFUSED, message: "the phone token must be 32 hex characters".into() });
     }
     let exe = sidecar_path(&app)?;
     tauri::async_runtime::spawn_blocking(move || {
         let mut cmd = sidecar_command(&exe);
-        cmd.args(["serve", &port.to_string()]);
+        cmd.args(["serve", &port.to_string(), &token]);
         start_phone(&app.state::<PhoneServer>(), cmd, port, PHONE_START_TIMEOUT)
     })
     .await
@@ -351,7 +381,7 @@ fn phone_stop(server: tauri::State<PhoneServer>) {
 pub fn run() {
     let app = tauri::Builder::default()
         .manage(PhoneServer::default())
-        .invoke_handler(tauri::generate_handler![get_spec, player, phone_lan_ip, phone_start, phone_status, phone_stop, ascii::ascii_art])
+        .invoke_handler(tauri::generate_handler![get_spec, player, icon_cache, skin_cache, phone_lan_ip, phone_start, phone_status, phone_stop, ascii::ascii_art])
         .build(tauri::generate_context!())
         .expect("error while building tauri application");
     app.run(|handle, event| {
@@ -383,9 +413,11 @@ mod tests {
         path
     }
 
+    const TEST_TOKEN: &str = "00112233445566778899aabbccddeeff";
+
     fn serve(exe: &std::path::Path, lock: &std::path::Path, port: u16) -> std::process::Command {
         let mut cmd = sidecar_command(exe);
-        cmd.arg("--lockfile").arg(lock).args(["serve", &port.to_string()]);
+        cmd.arg("--lockfile").arg(lock).args(["serve", &port.to_string(), TEST_TOKEN]);
         cmd
     }
 

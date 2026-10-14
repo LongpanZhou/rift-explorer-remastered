@@ -10,6 +10,8 @@ import {
   setTitle,
   setTokens,
   downloadAsset,
+  cacheIcons,
+  cacheSkinArt,
   claimReward,
   claimAllRewards,
   loadRewards,
@@ -23,7 +25,7 @@ import {
   parseAutoArgs,
   decodeName,
 } from "./player";
-import { mkdtempSync, readFileSync } from "fs";
+import { mkdtempSync, readdirSync, readFileSync, writeFileSync } from "fs";
 import { tmpdir } from "os";
 import { join } from "path";
 import { encodeText } from "./text";
@@ -54,6 +56,15 @@ describe("player actions refuse before writing", () => {
     await expect(setIcon(client, 4)).rejects.toBeInstanceOf(ActionRefused);
     await expect(setIcon(client, 99)).rejects.toBeInstanceOf(ActionRefused);
     expect(writes).toHaveLength(1);
+  });
+
+  test("the extra icons are set without the inventory listing them", async () => {
+    const { client, writes } = fakeClient({ [ICONS]: [] });
+    await setIcon(client, 500);
+    await expect(setIcon(client, 501)).rejects.toBeInstanceOf(ActionRefused);
+    expect(writes).toEqual([
+      { method: "PUT", path: "/lol-summoner/v1/current-summoner/icon", body: { profileIconId: 500 } },
+    ]);
   });
 
   test("an owned icon is set by id", async () => {
@@ -168,11 +179,12 @@ test("loadProfile keeps the local player's entry and drops identifiers", async (
     [SKINS]: [{ itemId: 20001, owned: true }],
   });
   const p = await loadProfile(client);
-  expect(p.icons).toEqual([
+  expect(p.icons.filter((i) => i.id === 7 || i.id === 8)).toEqual([
     { id: 8, title: "Eight", owned: false },
     { id: 7, title: "Seven", owned: true },
   ]);
-  expect(p.skins.find((s) => s.id === 20001)?.owned).toBe(true);
+  expect(p.icons.find((i) => i.id === 500)).toEqual({ id: 500, title: "", owned: true });
+  expect(p.skins.find((s) => s.id === 20001)).toMatchObject({ owned: true, champion: "B" });
   expect(p.skins.find((s) => s.id === 20000)?.owned).toBe(false);
   expect(p.games[0]).toMatchObject({ championId: 20, win: true });
   expect(JSON.stringify(p)).not.toContain("puuid");
@@ -197,6 +209,34 @@ test("downloads save the client's full image and refuse unknown items", async ()
   await expect(downloadAsset(client, "ward", 1, dir)).rejects.toBeInstanceOf(ActionRefused);
   await expect(downloadAsset(client, "icon", 1.5, dir)).rejects.toBeInstanceOf(ActionRefused);
   expect(writes).toHaveLength(0);
+});
+
+test("icon cache copies each icon once, keeps the copies it has, and lists the ones it cannot get", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "rift-icons-"));
+  writeFileSync(join(dir, "8.jpg"), "old-copy");
+  const { client, writes } = fakeClient({
+    "/lol-game-data/assets/v1/summoner-icons.json": [{ id: 7 }, { id: 8 }, { id: 9 }],
+    "/lol-game-data/assets/v1/profile-icons/7.jpg": "icon-7",
+    "/lol-game-data/assets/v1/profile-icons/8.jpg": "icon-8",
+    // The client has no picture for 9.
+  });
+  expect(await cacheIcons(client, dir)).toEqual({ dir, missing: [9] });
+  expect(readFileSync(join(dir, "7.jpg"), "utf8")).toBe("icon-7");
+  expect(readFileSync(join(dir, "8.jpg"), "utf8")).toBe("old-copy");
+  expect(readdirSync(dir).sort()).toEqual(["7.jpg", "8.jpg"]);
+  await expect(cacheIcons(client, "relative")).rejects.toBeInstanceOf(ActionRefused);
+  expect(writes).toHaveLength(0);
+});
+
+test("skin art copies each loading picture, and lists the skins that have none", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "rift-skin-art-"));
+  const { client } = fakeClient({
+    "/lol-game-data/assets/v1/skins.json": { "1": { id: 1, loadScreenPath: "/art/one.jpg" }, "2": { id: 2 } },
+    "/art/one.jpg": "skin-one",
+  });
+  expect(await cacheSkinArt(client, dir, [1, 2, 3])).toEqual({ dir, missing: [2, 3] });
+  expect(readFileSync(join(dir, "1.jpg"), "utf8")).toBe("skin-one");
+  expect(readdirSync(dir)).toEqual(["1.jpg"]);
 });
 
 test("rewards: only pending grants are listed; forced grants claim every item", async () => {
