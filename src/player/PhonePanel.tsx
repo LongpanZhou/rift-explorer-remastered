@@ -35,11 +35,14 @@ export default function PhonePanel({ checkMs = CHECK_MS }: { checkMs?: number } 
 
   const message = (e: unknown) => (e as { message?: string })?.message ?? String(e);
 
-  /** Shows the link and QR code for the page, on the port it is on. */
+  /**
+   * Shows the link and QR code for the page, on the port it is on. The QR code carries the token;
+   * the link shown does not.
+   */
   const showLink = async () => {
-    const url = `http://${lanIp.current}:${portInUse.current}/?t=${token.current}`;
-    setQr(await QRCode.toDataURL(url, { margin: 1, width: 240, color: { dark: "#0f1419", light: "#ffffff" } }));
-    setLink(url);
+    const address = `http://${lanIp.current}:${portInUse.current}/`;
+    setQr(await QRCode.toDataURL(`${address}?t=${token.current}`, { margin: 1, width: 240, color: { dark: "#0f1419", light: "#ffffff" } }));
+    setLink(address);
   };
 
   const start = async () => {

@@ -535,12 +535,12 @@ export function phoneAccess(req: Request, token: string): Response | null {
   return new Response("Scan the QR code in the app to open the phone page.", { status: 403 });
 }
 
-/** How many ports in a row the phone page tries, from the one asked for, when the first is taken. */
-export const PHONE_PORTS = 10;
+/** The highest port number there is. */
+const LAST_PORT = 65535;
 
 /**
  * Runs the phone server on the local network until the process is stopped. If `port` is taken,
- * the next free ports are tried, up to PHONE_PORTS in all. The app waits for the
+ * each port after it is tried in turn until a free one is found. The app waits for the
  * `phone page on port N` line on stderr, which says the port used, before it shows the QR code.
  * `token` is the 32 hex characters in the QR code's link.
  */
@@ -559,8 +559,8 @@ export function servePhone(lock: LockFile, port: number, token: string): Promise
     } catch (err: any) {
       const busy = err?.code === "EADDRINUSE" || /in use/i.test(String(err?.message));
       if (!busy) throw err;
-      if (found + 1 >= port + PHONE_PORTS) {
-        throw new Error(`ports ${port} to ${found} are all in use. Close the other programs using them, or restart the app.`);
+      if (found >= LAST_PORT) {
+        throw new Error(`no free port from ${port} to ${LAST_PORT}. Close the other programs using them, or restart the app.`);
       }
       found++;
     }

@@ -60,8 +60,9 @@ test("when 8787 is taken, the page starts on the next free port and the link say
   root = createRoot(box);
   await act(async () => root!.render(<PhonePanel checkMs={30} />));
   await act(async () => box.querySelector("button")!.click());
-  expect(box.textContent).toContain("http://192.168.1.20:8788/?t=");
+  expect(box.textContent).toContain("http://192.168.1.20:8788/");
   expect(box.textContent).not.toContain("http://192.168.1.20:8787/");
+  expect(box.textContent).not.toContain("?t=");
 });
 
 test("a phone page that stopped is started again on the same address, and the reason is shown", async () => {
