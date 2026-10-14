@@ -12,11 +12,14 @@ import { createRoot, type Root } from "react-dom/client";
 
 let health: { state: string; reason: string }[] = [];
 const calls: string[] = [];
+// The port the page reports it started on.
+let startedOn = 8787;
 mock.module("@tauri-apps/api/core", () => ({
   convertFileSrc: (path: string) => path,
   invoke: async (cmd: string) => {
     calls.push(cmd);
     if (cmd === "phone_lan_ip") return "192.168.1.20";
+    if (cmd === "phone_start") return startedOn;
     if (cmd === "phone_status") return health.shift() ?? { state: "ok", reason: "" };
     return null;
   },
@@ -34,6 +37,7 @@ afterEach(() => {
   document.body.innerHTML = "";
   calls.length = 0;
   health = [];
+  startedOn = 8787;
 });
 
 async function startPanel() {
@@ -48,6 +52,17 @@ async function startPanel() {
 }
 const wait = (ms: number) => act(() => new Promise((r) => setTimeout(r, ms)));
 const starts = () => calls.filter((c) => c === "phone_start").length;
+
+test("when 8787 is taken, the page starts on the next free port and the link says which", async () => {
+  startedOn = 8788;
+  const box = document.createElement("div");
+  document.body.append(box);
+  root = createRoot(box);
+  await act(async () => root!.render(<PhonePanel checkMs={30} />));
+  await act(async () => box.querySelector("button")!.click());
+  expect(box.textContent).toContain("http://192.168.1.20:8788/?t=");
+  expect(box.textContent).not.toContain("http://192.168.1.20:8787/");
+});
 
 test("a phone page that stopped is started again on the same address, and the reason is shown", async () => {
   const box = await startPanel();

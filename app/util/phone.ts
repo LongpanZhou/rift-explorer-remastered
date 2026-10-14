@@ -535,19 +535,36 @@ export function phoneAccess(req: Request, token: string): Response | null {
   return new Response("Scan the QR code in the app to open the phone page.", { status: 403 });
 }
 
+/** How many ports in a row the phone page tries, from the one asked for, when the first is taken. */
+export const PHONE_PORTS = 10;
+
 /**
- * Runs the phone server on the local network until the process is stopped. The app waits
- * for the `phone page on port` line on stderr before it shows the QR code. `token` is the
- * 32 hex characters in the QR code's link.
+ * Runs the phone server on the local network until the process is stopped. If `port` is taken,
+ * the next free ports are tried, up to PHONE_PORTS in all. The app waits for the
+ * `phone page on port N` line on stderr, which says the port used, before it shows the QR code.
+ * `token` is the 32 hex characters in the QR code's link.
  */
 export function servePhone(lock: LockFile, port: number, token: string): Promise<never> {
   if (!/^[0-9a-f]{32}$/.test(token)) throw new Error("the phone token must be 32 hex characters");
   const client = lcuClient(lock);
-  Bun.serve({
-    hostname: "0.0.0.0",
-    port,
-    fetch: (req) => phoneAccess(req, token) ?? handlePhone(req, { client }),
-  });
-  console.error(`phone page on port ${port}`);
+  let found = port;
+  for (;;) {
+    try {
+      Bun.serve({
+        hostname: "0.0.0.0",
+        port: found,
+        fetch: (req) => phoneAccess(req, token) ?? handlePhone(req, { client }),
+      });
+      break;
+    } catch (err: any) {
+      const busy = err?.code === "EADDRINUSE" || /in use/i.test(String(err?.message));
+      if (!busy) throw err;
+      if (found + 1 >= port + PHONE_PORTS) {
+        throw new Error(`ports ${port} to ${found} are all in use. Close the other programs using them, or restart the app.`);
+      }
+      found++;
+    }
+  }
+  console.error(`phone page on port ${found}`);
   return new Promise(() => {});
 }

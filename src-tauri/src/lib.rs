@@ -249,7 +249,7 @@ fn ping(port: u16) -> bool {
 
 /// Starts the phone server from `cmd`, replacing one already running. A stop that comes while it
 /// starts wins: the new server is stopped and the start fails.
-fn start_phone(server: &PhoneServer, cmd: std::process::Command, port: u16, timeout: std::time::Duration) -> Result<(), SidecarError> {
+fn start_phone(server: &PhoneServer, cmd: std::process::Command, port: u16, timeout: std::time::Duration) -> Result<u16, SidecarError> {
     let _one_at_a_time = server.starting.lock().unwrap_or_else(|e| e.into_inner());
     stop_phone(server);
     server.cancelled.store(false, std::sync::atomic::Ordering::SeqCst);
@@ -260,8 +260,9 @@ fn start_phone(server: &PhoneServer, cmd: std::process::Command, port: u16, time
         reap(&mut running.child);
         return Err(unavailable("the phone page was stopped".into()));
     }
+    let found = running.port;
     *slot = Some(running);
-    Ok(())
+    Ok(found)
 }
 
 /// This computer's address on the local network, for the QR code. No packets are sent: a UDP
@@ -286,7 +287,7 @@ const PHONE_START_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(
 /// page is listening, or with the sidecar's own message when it stops first (no
 /// client running, port in use).
 #[tauri::command]
-async fn phone_start(app: tauri::AppHandle, port: u16, token: String) -> Result<(), SidecarError> {
+async fn phone_start(app: tauri::AppHandle, port: u16, token: String) -> Result<u16, SidecarError> {
     if port < 1024 {
         return Err(SidecarError { code: ACTION_REFUSED, message: "port must be 1024 or higher".into() });
     }
@@ -320,7 +321,7 @@ fn spawn_phone(
     // Read stderr until the sidecar exits, so it never blocks on a full pipe. The line
     // `phone page on port N` means the server is listening; the end of stderr means it stopped.
     // Every line also goes to the log, which keeps only the last few, so it never grows.
-    let (tx, rx) = std::sync::mpsc::channel::<Option<String>>();
+    let (tx, rx) = std::sync::mpsc::channel::<Result<u16, String>>();
     let log: Log = Default::default();
     if let Some(stderr) = child.stderr.take() {
         let log = log.clone();
@@ -328,12 +329,13 @@ fn spawn_phone(
             let mut text = String::new();
             let mut ready = false;
             for line in std::io::BufRead::lines(std::io::BufReader::new(stderr)).map_while(Result::ok) {
-                if !ready && line.starts_with("phone page on port") {
-                    ready = true;
-                    let _ = tx.send(None);
-                    continue;
-                }
                 if !ready {
+                    // The port the page is on can differ from the one asked for, when that one is taken.
+                    if let Some(found) = line.strip_prefix("phone page on port ").and_then(|n| n.trim().parse::<u16>().ok()) {
+                        ready = true;
+                        let _ = tx.send(Ok(found));
+                        continue;
+                    }
                     text.push_str(&line);
                     text.push('\n');
                 }
@@ -343,12 +345,12 @@ fn spawn_phone(
                     lines.pop_front();
                 }
             }
-            let _ = tx.send(Some(text));
+            let _ = tx.send(Err(text));
         });
     }
     match rx.recv_timeout(timeout) {
-        Ok(None) => Ok(Running { child, port, log }),
-        Ok(Some(text)) => {
+        Ok(Ok(found)) => Ok(Running { child, port: found, log }),
+        Ok(Err(text)) => {
             let status = child.wait().ok();
             let text = text.trim();
             Err(SidecarError {
@@ -443,16 +445,20 @@ mod tests {
     }
 
     #[test]
-    fn phone_page_starts_then_a_second_one_reports_the_busy_port() {
+    fn a_second_phone_page_takes_the_next_free_port() {
         let Some(exe) = sidecar() else { return };
         let lock = lockfile("rift-phone-test-lockfile");
-        let port = 18787;
-        let mut first = spawn_phone(serve(&exe, &lock, port), port, Duration::from_secs(15)).ok().expect("first server starts").child;
+        let port = 18800;
+        let mut first = spawn_phone(serve(&exe, &lock, port), port, Duration::from_secs(15)).ok().expect("first server starts");
+        assert_eq!(first.port, port);
         assert!(std::net::TcpStream::connect(("127.0.0.1", port)).is_ok(), "the page answers once ready");
-        let err = spawn_phone(serve(&exe, &lock, port), port, Duration::from_secs(15)).expect_err("second server fails");
-        assert!(err.message.contains("already in use"), "{}", err.message);
-        let _ = first.kill();
-        let _ = first.wait();
+        let mut second = spawn_phone(serve(&exe, &lock, port), port, Duration::from_secs(15)).ok().expect("second server starts");
+        assert_eq!(second.port, port + 1);
+        assert!(std::net::TcpStream::connect(("127.0.0.1", port + 1)).is_ok(), "the second page answers on the next port");
+        let _ = first.child.kill();
+        let _ = first.child.wait();
+        let _ = second.child.kill();
+        let _ = second.child.wait();
     }
 
     /// A stand-in server that says it is listening after `delay` seconds, then runs until stopped.

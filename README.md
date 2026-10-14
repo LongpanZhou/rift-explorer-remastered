@@ -113,7 +113,7 @@ spells, a searchable champion grid, and a Lock In button.
 > Your phone must be on the **same Wi-Fi** as your computer, and the app must stay open.
 > The first time on Windows, a firewall prompt for `lcu-sidecar` may open behind the app window:
 > click **Allow** (private networks), then reload the page on your phone.
-> The page is served from your computer on port `8787`. Nothing goes through the internet.
+> The page is served from your computer on port `8787`, or the next free port up to `8796` when 8787 is taken. Nothing goes through the internet.
 > Auto champ select turns off while the Phone tab is open.
 
 ## 📥 Installation

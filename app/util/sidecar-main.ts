@@ -131,8 +131,7 @@ async function main(): Promise<void> {
     try {
       await servePhone(lock, port, positional[2] ?? "");
     } catch (err: any) {
-      const busy = err?.code === "EADDRINUSE" || /in use/i.test(String(err?.message));
-      fail(EXIT.REQUEST_FAILED, busy ? `port ${port} is already in use. Close the other program using it, or restart the app.` : String(err?.message ?? err));
+      fail(EXIT.REQUEST_FAILED, String(err?.message ?? err));
     }
     return;
   }

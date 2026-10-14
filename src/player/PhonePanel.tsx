@@ -29,8 +29,18 @@ export default function PhonePanel({ checkMs = CHECK_MS }: { checkMs?: number } 
   const restarts = useRef<number[]>([]);
   // The secret in the QR code's link. Each Start makes a new one; restarts keep it, so the phone stays signed in.
   const token = useRef("");
+  // The port the page is on: PORT, or the next free one when that is taken. And this computer's address.
+  const portInUse = useRef(PORT);
+  const lanIp = useRef("");
 
   const message = (e: unknown) => (e as { message?: string })?.message ?? String(e);
+
+  /** Shows the link and QR code for the page, on the port it is on. */
+  const showLink = async () => {
+    const url = `http://${lanIp.current}:${portInUse.current}/?t=${token.current}`;
+    setQr(await QRCode.toDataURL(url, { margin: 1, width: 240, color: { dark: "#0f1419", light: "#ffffff" } }));
+    setLink(url);
+  };
 
   const start = async () => {
     setBusy(true);
@@ -38,12 +48,10 @@ export default function PhonePanel({ checkMs = CHECK_MS }: { checkMs?: number } 
     setNotice("");
     restarts.current = [];
     try {
-      const ip: string = await invoke("phone_lan_ip");
+      lanIp.current = await invoke("phone_lan_ip");
       token.current = Array.from(crypto.getRandomValues(new Uint8Array(16)), (b) => b.toString(16).padStart(2, "0")).join("");
-      await invoke("phone_start", { port: PORT, token: token.current });
-      const url = `http://${ip}:${PORT}/?t=${token.current}`;
-      setQr(await QRCode.toDataURL(url, { margin: 1, width: 240, color: { dark: "#0f1419", light: "#ffffff" } }));
-      setLink(url);
+      portInUse.current = await invoke("phone_start", { port: PORT, token: token.current });
+      await showLink();
     } catch (e) {
       setError(message(e));
     } finally {
@@ -87,8 +95,14 @@ export default function PhonePanel({ checkMs = CHECK_MS }: { checkMs?: number } 
         }
         restarts.current.push(now);
         setNotice(`The phone page stopped (${health.reason}). Restarting it...`);
-        await invoke("phone_start", { port: PORT, token: token.current });
-        setNotice(`The phone page stopped (${health.reason}) and was restarted. The phone reconnects by itself.`);
+        const before = portInUse.current;
+        portInUse.current = await invoke("phone_start", { port: before, token: token.current });
+        if (portInUse.current === before) {
+          setNotice(`The phone page stopped (${health.reason}) and was restarted. The phone reconnects by itself.`);
+        } else {
+          await showLink();
+          setNotice(`The phone page stopped (${health.reason}) and restarted on port ${portInUse.current}. Scan the QR code again.`);
+        }
       } catch (e) {
         setNotice(`The phone page stopped and could not be restarted: ${message(e)}. Retrying...`);
       } finally {
