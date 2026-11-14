@@ -14,13 +14,18 @@ let health: { state: string; reason: string }[] = [];
 const calls: string[] = [];
 // The port the page reports it started on.
 let startedOn = 8787;
+// When set, phone_status waits for it, so a test can press Stop while a check is in flight.
+let statusGate: Promise<void> | null = null;
 mock.module("@tauri-apps/api/core", () => ({
   convertFileSrc: (path: string) => path,
   invoke: async (cmd: string) => {
     calls.push(cmd);
     if (cmd === "phone_lan_ip") return "192.168.1.20";
     if (cmd === "phone_start") return startedOn;
-    if (cmd === "phone_status") return health.shift() ?? { state: "ok", reason: "" };
+    if (cmd === "phone_status") {
+      if (statusGate) await statusGate;
+      return health.shift() ?? { state: "ok", reason: "" };
+    }
     return null;
   },
 }));
@@ -38,6 +43,7 @@ afterEach(() => {
   calls.length = 0;
   health = [];
   startedOn = 8787;
+  statusGate = null;
 });
 
 async function startPanel() {
@@ -91,4 +97,33 @@ test("a healthy phone page is left alone", async () => {
   await wait(150);
   expect(starts()).toBe(1);
   expect(calls.filter((c) => c === "phone_status").length).toBeGreaterThan(2);
+});
+
+test("a page that is found off while the panel shows a link is started again", async () => {
+  const box = await startPanel();
+  health = [{ state: "off", reason: "" }];
+  await wait(120);
+  expect(starts()).toBe(2);
+  expect(box.textContent).toContain("The phone page stopped (it was not running) and was restarted.");
+  expect(box.textContent).toContain("http://192.168.1.20:8787/");
+});
+
+test("a check that finishes after Stop does not start the page again", async () => {
+  const box = await startPanel();
+  let release!: () => void;
+  statusGate = new Promise((r) => (release = r));
+  health = [{ state: "stopped", reason: "exit code 1" }];
+  // Wait for a status check to be waiting on the gate.
+  const before = calls.filter((c) => c === "phone_status").length;
+  for (let i = 0; i < 20 && calls.filter((c) => c === "phone_status").length === before; i++) await wait(20);
+  expect(calls.filter((c) => c === "phone_status").length).toBeGreaterThan(before);
+
+  await act(async () => box.querySelector("button")!.click()); // Stop
+  expect(box.textContent).toContain("Phone champ select");
+  release();
+  await wait(150);
+  // The stale yes did not restart the server the user just stopped.
+  expect(starts()).toBe(1);
+  expect(box.textContent).toContain("Phone champ select");
+  expect(box.textContent).not.toContain("http://192.168.1.20:8787/");
 });

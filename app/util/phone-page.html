@@ -312,6 +312,7 @@
 (() => {
   "use strict";
   const LOST = "Connection lost. Retrying...";
+  const EXPIRED = "This page's link expired. Scan the QR code in the app again.";
   const SAFE = /^[A-Za-z0-9_-][A-Za-z0-9._-]{0,63}$/;
   const PHASE = { ban: "Ban", pick: "Pick" };
   // The client's own champ select phases, when no pick or ban is running.
@@ -368,6 +369,9 @@
       const img = document.createElement("img");
       img.alt = "";
       img.loading = "lazy";
+      img.decoding = "async";
+      // Keep the page's updates ahead of a burst of portraits in the browser's request queue.
+      img.fetchPriority = "low";
       img.onerror = () => { img.remove(); box.classList.add("noimg"); };
       img.src = src;
       box.prepend(img);
@@ -378,11 +382,15 @@
   }
 
   // A request that gets no answer (the phone slept, Wi-Fi dropped) is given up, so it can never
-  // hold up the updates: a state read after 8 s, an action after 20 s (the PC gives the client
-  // 15 s), so a slow lock in is not reported as lost while it is still going through.
+  // hold up the updates: a state read after 16 s, an action after 20 s. The server gives the
+  // League client 15 s, so its own answer (or error) arrives before the state read is given up;
+  // a short limit reported a busy client as "Connection lost". Actions keep 20 s so a slow
+  // lock in is not reported as lost while it is still going through.
+  // `priority: high` asks the browser to send this before queued icon images; browsers that
+  // do not know it ignore it.
   async function api(path, body) {
     const stop = new AbortController();
-    const timer = setTimeout(() => stop.abort(), body ? 20000 : 8000);
+    const timer = setTimeout(() => stop.abort(), body ? 20000 : 16000);
     let res, data;
     try {
       res = await fetch(path, {
@@ -390,6 +398,7 @@
         headers: { "content-type": "application/json" },
         body: body ? JSON.stringify(body) : undefined,
         cache: "no-store",
+        priority: "high",
         signal: stop.signal,
       });
       data = await res.json().catch(() => ({}));
@@ -398,6 +407,7 @@
     } finally {
       clearTimeout(timer);
     }
+    if (res.status === 403) throw new Error(EXPIRED);
     if (!res.ok) throw new Error(data.error || "Request failed (" + res.status + ")");
     return data;
   }
@@ -448,13 +458,13 @@
         $("phase").textContent = "Not connected";
         for (const id of ["bans", "zones", "dock", "skins"]) $(id).hidden = true;
         $("idle").hidden = false;
-        $("idle-text").textContent = err.message === LOST ? LOST : err.message + ". Retrying...";
+        $("idle-text").textContent = err.message === LOST || err.message === EXPIRED ? err.message : err.message + ". Retrying...";
       }
       return;
     }
     next.clockAt = Date.now();
     state = next;
-    if ($("msg").textContent === LOST) say($("msg"), "");
+    if ($("msg").textContent === LOST || $("msg").textContent === EXPIRED) say($("msg"), "");
     try {
       render();
     } catch (err) {

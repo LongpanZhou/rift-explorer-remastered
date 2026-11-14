@@ -177,8 +177,9 @@ struct PhoneServer {
     child: Mutex<Option<Running>>,
     /// Held for a whole start, so two starts never overlap and lose track of a server.
     starting: Mutex<()>,
-    /// Set by a stop. A start still waiting for its server stops that server instead of keeping it.
-    cancelled: std::sync::atomic::AtomicBool,
+    /// Bumped by every stop. A start records it before spawning and drops its server when the
+    /// value changed meanwhile, so a stop during a start can never be lost.
+    generation: std::sync::atomic::AtomicU64,
 }
 
 /// Kills a server process and waits for it to exit, so it is not left behind as a zombie.
@@ -187,12 +188,17 @@ fn reap(child: &mut std::process::Child) {
     let _ = child.wait();
 }
 
-/// Stops the phone server, and any start still in progress.
-fn stop_phone(server: &PhoneServer) {
-    server.cancelled.store(true, std::sync::atomic::Ordering::SeqCst);
+/// Kills the server in the slot, if any.
+fn kill_phone_child(server: &PhoneServer) {
     if let Some(mut running) = server.child.lock().unwrap_or_else(|e| e.into_inner()).take() {
         reap(&mut running.child);
     }
+}
+
+/// Stops the phone server, and any start still in progress.
+fn stop_phone(server: &PhoneServer) {
+    server.generation.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+    kill_phone_child(server);
 }
 
 /// How the phone server is doing, for the Phone tab to show and to restart it.
@@ -232,10 +238,10 @@ fn check_phone(server: &PhoneServer) -> PhoneHealth {
     PhoneHealth { state: "not-answering", reason }
 }
 
-/// True when the phone server answers `GET /api/ping` on `port` within two seconds.
-fn ping(port: u16) -> bool {
+/// True when the phone server answers `GET /api/ping` once on `port` within a second.
+fn ping_once(port: u16) -> bool {
     use std::io::{Read, Write};
-    let wait = std::time::Duration::from_secs(2);
+    let wait = std::time::Duration::from_secs(1);
     let addr = std::net::SocketAddr::from(([127, 0, 0, 1], port));
     let Ok(mut stream) = std::net::TcpStream::connect_timeout(&addr, wait) else { return false };
     let _ = stream.set_read_timeout(Some(wait));
@@ -247,16 +253,32 @@ fn ping(port: u16) -> bool {
     stream.read_exact(&mut head).is_ok() && head.starts_with(b"HTTP/1.1 200")
 }
 
+/// True when the phone server answers. A local server answers at once, so a single failed
+/// check under load (Windows scheduling, a burst of phone requests) is retried before the
+/// server is called dead and restarted; a needless restart drops the phone's connection.
+fn ping(port: u16) -> bool {
+    for attempt in 0..3 {
+        if ping_once(port) {
+            return true;
+        }
+        if attempt < 2 {
+            std::thread::sleep(std::time::Duration::from_millis(150));
+        }
+    }
+    false
+}
+
 /// Starts the phone server from `cmd`, replacing one already running. A stop that comes while it
 /// starts wins: the new server is stopped and the start fails.
 fn start_phone(server: &PhoneServer, cmd: std::process::Command, port: u16, timeout: std::time::Duration) -> Result<u16, SidecarError> {
+    // Read before waiting for the lock: a stop from this call on changes it, and this start
+    // then drops its server. A stop before this call does not cancel it.
+    let generation = server.generation.load(std::sync::atomic::Ordering::SeqCst);
     let _one_at_a_time = server.starting.lock().unwrap_or_else(|e| e.into_inner());
-    stop_phone(server);
-    server.cancelled.store(false, std::sync::atomic::Ordering::SeqCst);
+    kill_phone_child(server);
     let mut running = spawn_phone(cmd, port, timeout)?;
     let mut slot = server.child.lock().unwrap_or_else(|e| e.into_inner());
-    // Checked under the lock stop_phone takes, so a stop either sees this server or cancels it here.
-    if server.cancelled.load(std::sync::atomic::Ordering::SeqCst) {
+    if server.generation.load(std::sync::atomic::Ordering::SeqCst) != generation {
         reap(&mut running.child);
         return Err(unavailable("the phone page was stopped".into()));
     }
@@ -313,7 +335,10 @@ fn spawn_phone(
     timeout: std::time::Duration,
 ) -> Result<Running, SidecarError> {
     let mut child = cmd
-        .stdin(std::process::Stdio::null())
+        // A pipe the app keeps open: when the app exits (even killed), it closes, and the
+        // sidecar sees the end of its stdin and exits. Otherwise it would keep the phone port.
+        .env("RIFT_PHONE_STDIN", "1")
+        .stdin(std::process::Stdio::piped())
         .stdout(std::process::Stdio::null())
         .stderr(std::process::Stdio::piped())
         .spawn()

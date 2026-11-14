@@ -128,8 +128,17 @@ async function main(): Promise<void> {
   // "serve <port> <token>" runs the phone page until the app stops it.
   if (positional[0] === "serve") {
     const port = Number(positional[1]);
+    // The app starts us with a pipe on stdin and keeps it open. If the app exits or is killed,
+    // the pipe closes; stop too, or this server would keep the phone port from the next run.
+    if (process.env.RIFT_PHONE_STDIN === "1") {
+      const stop = () => process.exit(0);
+      process.stdin.on("end", stop);
+      process.stdin.on("close", stop);
+      process.stdin.on("error", stop);
+      process.stdin.resume();
+    }
     try {
-      await servePhone(lock, port, positional[2] ?? "");
+      await servePhone(lock, port, positional[2] ?? "", lockfilePath);
     } catch (err: any) {
       fail(EXIT.REQUEST_FAILED, String(err?.message ?? err));
     }

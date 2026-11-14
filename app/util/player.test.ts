@@ -447,6 +447,35 @@ test("auto-pick skips banned, teammate and unowned champions, then locks", async
   ]);
 });
 
+test("auto-pick falls back to the client's champion grid when the pickable list is only the placeholder", async () => {
+  const gets: any = session({ type: "pick" });
+  gets["/lol-champ-select/v1/pickable-champion-ids"] = [-1];
+  gets["/lol-champ-select/v1/all-grid-champions"] = [
+    { id: 1, disabled: false, owned: true },
+    { id: 2, disabled: true, owned: true },
+    { id: 3, disabled: false, owned: false },
+  ];
+  const { client, writes } = fakeClient(gets);
+  const r = await autoTick(client, cfg({ picks: [1, 2, 3] }));
+  expect(r.did).toBe("locked in 1");
+  expect(writes).toEqual([
+    { method: "PATCH", path: "/lol-champ-select/v1/session/actions/7", body: { championId: 1, completed: true } },
+  ]);
+});
+
+test("auto-ban falls back to the client's champion grid too", async () => {
+  const gets: any = session({ type: "ban" });
+  gets["/lol-champ-select/v1/bannable-champion-ids"] = [];
+  gets["/lol-champ-select/v1/all-grid-champions"] = [
+    { id: 1, disabled: false, owned: false },
+    { id: 2, disabled: true, owned: true },
+  ];
+  const { client, writes } = fakeClient(gets);
+  const r = await autoTick(client, cfg({ lock: false, bans: [2, 1] }));
+  expect(r.did).toBe("hovered ban 1");
+  expect(writes[0].body).toEqual({ championId: 1, completed: false });
+});
+
 test("auto-ban hovers without lock, and never overrides your own hover", async () => {
   const hover = fakeClient(session({ type: "ban" }));
   expect((await autoTick(hover.client, cfg({ lock: false, bans: [2] }))).did).toBe("hovered ban 2");

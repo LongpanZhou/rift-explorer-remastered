@@ -2,8 +2,8 @@
  * The phone champ select page. It runs on this computer, on the local network only: a phone on
  * the same Wi-Fi can open it, and nothing goes through the internet.
  */
-import { ActionRefused, awaitingAnswer, lcuClient, openAction, PAGES, takenBy, type LcuClient } from "./player";
-import type { LockFile } from "./LockFileParser";
+import { ActionRefused, awaitingAnswer, choosableChampions, lcuClient, openAction, PAGES, takenBy, type LcuClient } from "./player";
+import { parse, type LockFile } from "./LockFileParser";
 import PHONE_HTML from "./phone-page.html" with { type: "text" };
 import { championIcon, skinArt, spellIcon, summonerSpellsSoon, type Fetcher } from "./phoneIcons";
 import { runeData, runeIcon, saveRunePage } from "./phoneRunes";
@@ -27,21 +27,6 @@ type SwapKind = keyof typeof SWAP_PATHS;
 const DODGE =
   "/lol-login/v1/session/invoke?destination=lcdsServiceProxy&method=call&args=" +
   encodeURIComponent(JSON.stringify(["", "teambuilder-draft", "quitV2", ""]));
-
-/**
- * The champions you may choose for a pick or a ban, as ids. The client's pickable or bannable
- * list can hold only its placeholder (-1, "None"); then the champion grid the client draws is
- * used: champions that are not disabled and, for a pick, that you own or may play for free.
- */
-async function choosable(client: LcuClient, type: string): Promise<number[]> {
-  const path = type === "ban" ? "/lol-champ-select/v1/bannable-champion-ids" : "/lol-champ-select/v1/pickable-champion-ids";
-  const ids = ((await client.get(path).catch(() => [])) as unknown[]).filter(isSpellOrChamp);
-  if (ids.length) return ids;
-  const grid: any[] = await client.get("/lol-champ-select/v1/all-grid-champions").catch(() => []);
-  return grid
-    .filter((c) => isSpellOrChamp(c?.id) && !c.disabled && (type === "ban" || c.owned || c.freeToPlay || c.rented || c.freeToPlayForQueue))
-    .map((c) => c.id as number);
-}
 
 /** Your pick that has not started yet, if you have one. */
 const upcomingPick = (actions: any[], me: number) =>
@@ -193,7 +178,7 @@ export async function phoneState(client: LcuClient, fetchFn?: Fetcher) {
   const champs = (ids: number[] | undefined) => (ids ?? []).filter(isSpellOrChamp).map((id) => ({ id, ...named(id) }));
 
   const [options, selection, champSwaps, orderSwaps, pages, allSpells, banned, skins] = await Promise.all([
-    turn || plan ? choosable(client, turn?.type ?? "pick") : [],
+    turn || plan ? choosableChampions(client, turn?.type ?? "pick") : [],
     client.get(MY_SELECTION).catch(() => null),
     // Champions are swapped only after you lock in, pick order only before: read just that list.
     lockedIn(me) ? client.get(SWAP_PATHS.champion).catch(() => []) : [],
@@ -303,7 +288,7 @@ export async function phoneChoose(client: LcuClient, championId: unknown, lock: 
   // Locking with no champion locks the hover, or your pre-pick if the client did not carry it over.
   const id = useHover ? hoverOf(turn, intent) : championId;
   if (!isSpellOrChamp(id)) throw new ActionRefused("hover a champion first");
-  if (!(await choosable(client, turn.type)).includes(id)) throw new ActionRefused("that champion is not available to you");
+  if (!(await choosableChampions(client, turn.type)).includes(id)) throw new ActionRefused("that champion is not available to you");
   if (takenBy(session, actions, me).has(id)) throw new ActionRefused("that champion is banned or taken");
   // A pre-pick sends only the champion: the action has not started, so it cannot be completed.
   await client.patch(`/lol-champ-select/v1/session/actions/${turn.id}`, current ? { championId: id, completed: locking } : { championId: id });
@@ -497,7 +482,7 @@ const ROUTES: Record<string, Route> = {
 export async function handlePhone(req: Request, deps: PhoneDeps): Promise<Response> {
   const url = new URL(req.url);
   if (req.method === "GET" && url.pathname === "/") {
-    return new Response(PHONE_PAGE, { headers: { "content-type": "text/html; charset=utf-8" } });
+    return new Response(PHONE_PAGE, { headers: { "content-type": "text/html; charset=utf-8", "cache-control": "no-store" } });
   }
   if (url.pathname.startsWith("/icon/")) {
     return req.method === "GET" ? iconReply(url.pathname, deps) : reply({ error: "not found" }, 404);
@@ -539,14 +524,52 @@ export function phoneAccess(req: Request, token: string): Response | null {
 const LAST_PORT = 65535;
 
 /**
+ * Follows the lockfile while the page runs. The League client writes a new lockfile with a new
+ * port and password each time it starts, so a server created once at startup goes deaf after a
+ * client restart; this reads it again and reports a changed lock. A missing or half-written
+ * lockfile is ignored, and the last good one is kept. Returns a function that stops watching.
+ */
+export function watchLockfile(
+  initial: LockFile,
+  path: string,
+  onChange: (lock: LockFile) => void,
+  everyMs = 2000,
+): () => void {
+  let last = `${initial.port}:${initial.password}`;
+  let reading = false;
+  const timer = setInterval(async () => {
+    if (reading) return;
+    reading = true;
+    try {
+      const next = await parse(path);
+      const key = `${next.port}:${next.password}`;
+      if (key === last) return;
+      last = key;
+      onChange(next);
+    } catch {
+      // The client is closed or between writes: keep using the last lock.
+    } finally {
+      reading = false;
+    }
+  }, everyMs);
+  return () => clearInterval(timer);
+}
+
+/**
  * Runs the phone server on the local network until the process is stopped. If `port` is taken,
  * each port after it is tried in turn until a free one is found. The app waits for the
  * `phone page on port N` line on stderr, which says the port used, before it shows the QR code.
- * `token` is the 32 hex characters in the QR code's link.
+ * `token` is the 32 hex characters in the QR code's link. When `lockfilePath` is given, the
+ * lockfile is followed, so restarting the League client does not leave the page disconnected.
  */
-export function servePhone(lock: LockFile, port: number, token: string): Promise<never> {
+export function servePhone(lock: LockFile, port: number, token: string, lockfilePath?: string): Promise<never> {
   if (!/^[0-9a-f]{32}$/.test(token)) throw new Error("the phone token must be 32 hex characters");
-  const client = lcuClient(lock);
+  let client = lcuClient(lock);
+  if (lockfilePath) {
+    watchLockfile(lock, lockfilePath, (next) => {
+      client = lcuClient(next);
+    });
+  }
   let found = port;
   for (;;) {
     try {
@@ -557,7 +580,12 @@ export function servePhone(lock: LockFile, port: number, token: string): Promise
       });
       break;
     } catch (err: any) {
-      const busy = err?.code === "EADDRINUSE" || /in use/i.test(String(err?.message));
+      // "In use" is the common case. Windows also refuses ports reserved by Hyper-V/WSL with
+      // EACCES ("access is denied"); the next port is just as good for the phone page.
+      const busy =
+        err?.code === "EADDRINUSE" ||
+        err?.code === "EACCES" ||
+        /in use|permission denied|access is denied/i.test(String(err?.message));
       if (!busy) throw err;
       if (found >= LAST_PORT) {
         throw new Error(`no free port from ${port} to ${LAST_PORT}. Close the other programs using them, or restart the app.`);

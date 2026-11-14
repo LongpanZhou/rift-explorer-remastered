@@ -29,4 +29,6 @@ test("no counted games gives no summary, not zeros", () => {
 test("durations format as m:ss", () => {
   expect(formatDuration(1517)).toBe("25:17");
   expect(formatDuration(8)).toBe("0:08");
+  expect(formatDuration(1079.7)).toBe("18:00");
+  expect(formatDuration(59.6)).toBe("1:00");
 });

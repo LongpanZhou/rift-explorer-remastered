@@ -32,37 +32,56 @@ export default function PhonePanel({ checkMs = CHECK_MS }: { checkMs?: number } 
   // The port the page is on: PORT, or the next free one when that is taken. And this computer's address.
   const portInUse = useRef(PORT);
   const lanIp = useRef("");
+  // Bumped by every start and stop. Async work that finishes after a newer start or a stop
+  // (a stop pressed during "Starting...", the tab closing during a restart) is ignored, and a
+  // server it started anyway is stopped: it must not keep the port alive behind the panel.
+  const session = useRef(0);
 
   const message = (e: unknown) => (e as { message?: string })?.message ?? String(e);
 
   /**
    * Shows the link and QR code for the page, on the port it is on. The QR code carries the token;
-   * the link shown does not.
+   * the link shown does not. Nothing is shown when a newer start or a stop has taken over.
    */
   const showLink = async () => {
+    const id = session.current;
     const address = `http://${lanIp.current}:${portInUse.current}/`;
-    setQr(await QRCode.toDataURL(`${address}?t=${token.current}`, { margin: 1, width: 240, color: { dark: "#0f1419", light: "#ffffff" } }));
+    const qrCode = await QRCode.toDataURL(`${address}?t=${token.current}`, { margin: 1, width: 240, color: { dark: "#0f1419", light: "#ffffff" } });
+    if (id !== session.current) return;
+    setQr(qrCode);
     setLink(address);
   };
 
   const start = async () => {
+    const id = ++session.current;
     setBusy(true);
     setError("");
     setNotice("");
     restarts.current = [];
     try {
-      lanIp.current = await invoke("phone_lan_ip");
-      token.current = Array.from(crypto.getRandomValues(new Uint8Array(16)), (b) => b.toString(16).padStart(2, "0")).join("");
-      portInUse.current = await invoke("phone_start", { port: PORT, token: token.current });
+      const address = await invoke<string>("phone_lan_ip");
+      // Stopped or closed while looking up the address: do not start a server at all.
+      if (id !== session.current) return;
+      const secret = Array.from(crypto.getRandomValues(new Uint8Array(16)), (b) => b.toString(16).padStart(2, "0")).join("");
+      const port = await invoke<number>("phone_start", { port: PORT, token: secret });
+      if (id !== session.current) {
+        // A stop or a newer start happened while this one was starting: do not leave its server running.
+        await invoke("phone_stop").catch(() => {});
+        return;
+      }
+      lanIp.current = address;
+      token.current = secret;
+      portInUse.current = port;
       await showLink();
     } catch (e) {
-      setError(message(e));
+      if (id === session.current) setError(message(e));
     } finally {
-      setBusy(false);
+      if (id === session.current) setBusy(false);
     }
   };
 
   const stop = async () => {
+    ++session.current;
     setBusy(true);
     setError("");
     setNotice("");
@@ -81,42 +100,60 @@ export default function PhonePanel({ checkMs = CHECK_MS }: { checkMs?: number } 
   useEffect(() => {
     if (!link) return;
     let checking = false;
+    let cancelled = false;
+    const id = session.current;
     const timer = setInterval(async () => {
-      if (checking) return;
+      if (checking || cancelled) return;
       checking = true;
       try {
         const health: PhoneHealth = await invoke("phone_status");
-        if (health.state === "ok" || health.state === "off") return;
+        if (cancelled || id !== session.current) return;
+        if (health.state === "ok") return;
+        // "off" means no server is tracked (for example, the last restart failed); it is not
+        // healthy while this panel is showing a link, so it is started again like a stopped one.
+        const reason = health.reason || "it was not running";
         const now = Date.now();
         restarts.current = restarts.current.filter((t) => now - t < 60_000);
         if (restarts.current.length >= RESTARTS_PER_MINUTE) {
           setLink("");
           setQr("");
           setNotice("");
-          setError(`The phone page keeps stopping (${health.reason}). Start it again when the League client is ready.`);
+          setError(`The phone page keeps stopping (${reason}). Start it again when the League client is ready.`);
           return;
         }
         restarts.current.push(now);
-        setNotice(`The phone page stopped (${health.reason}). Restarting it...`);
+        setNotice(`The phone page stopped (${reason}). Restarting it...`);
         const before = portInUse.current;
-        portInUse.current = await invoke("phone_start", { port: before, token: token.current });
-        if (portInUse.current === before) {
-          setNotice(`The phone page stopped (${health.reason}) and was restarted. The phone reconnects by itself.`);
+        const next = await invoke<number>("phone_start", { port: before, token: token.current });
+        if (cancelled || id !== session.current) {
+          // Stopped or closed while this restart was starting: stop the server it just made.
+          await invoke("phone_stop").catch(() => {});
+          return;
+        }
+        portInUse.current = next;
+        if (next === before) {
+          setNotice(`The phone page stopped (${reason}) and was restarted. The phone reconnects by itself.`);
         } else {
           await showLink();
-          setNotice(`The phone page stopped (${health.reason}) and restarted on port ${portInUse.current}. Scan the QR code again.`);
+          setNotice(`The phone page stopped (${reason}) and restarted on port ${next}. Scan the QR code again.`);
         }
       } catch (e) {
-        setNotice(`The phone page stopped and could not be restarted: ${message(e)}. Retrying...`);
+        if (!cancelled && id === session.current) {
+          setNotice(`The phone page stopped and could not be restarted: ${message(e)}. Retrying...`);
+        }
       } finally {
         checking = false;
       }
     }, checkMs);
-    return () => clearInterval(timer);
+    return () => {
+      cancelled = true;
+      clearInterval(timer);
+    };
   }, [link, checkMs]);
 
   // Stop the server when the panel closes, so it is not left running.
   useEffect(() => () => {
+    ++session.current;
     invoke("phone_stop").catch(() => {});
   }, []);
 
@@ -124,7 +161,7 @@ export default function PhonePanel({ checkMs = CHECK_MS }: { checkMs?: number } 
     <div className="phone-panel">
       <p className="muted">
         Scan the code with your phone to see champ select, pick, lock and set spells, accept matches, queue up, switch mode or leave the lobby. Your phone must be on the same
-        Wi-Fi as this computer, and this app must stay open. Nothing goes through the internet. Auto champ select turns off
+        Wi-Fi as this computer, and this app must stay open. Keep this tab open too: switching to another tab stops the page. Nothing goes through the internet. Auto champ select turns off
         while this tab is open. The first time on Windows, a firewall prompt for lcu-sidecar may open behind this window: click Allow, then reload the page on your phone.
       </p>
       <button disabled={busy} onClick={link ? stop : start}>

@@ -111,6 +111,7 @@ spells, a searchable champion grid, and a Lock In button.
 
 > [!IMPORTANT]
 > Your phone must be on the **same Wi-Fi** as your computer, and the app must stay open.
+> Keep the **Phone tab** open too: switching to another tab on the computer stops the page.
 > The first time on Windows, a firewall prompt for `lcu-sidecar` may open behind the app window:
 > click **Allow** (private networks), then reload the page on your phone.
 > The page is served from your computer on port `8787`, or the next free port when 8787 is taken. Nothing goes through the internet.
@@ -211,8 +212,9 @@ and check Riot's rules first.
 <details>
 <summary><b>The phone page won't load.</b></summary>
 
-Make sure your phone and computer are on the same Wi-Fi network, the app is still open, and
-your firewall allows incoming connections on port `8787` (on Windows, allow `lcu-sidecar` on
+Make sure your phone and computer are on the same Wi-Fi network, the app is still open, and the
+**Phone tab** is still selected on the computer (switching tabs stops the page; Start it again).
+Your firewall must allow incoming connections on port `8787` (on Windows, allow `lcu-sidecar` on
 private networks, and set your Wi-Fi to a private network). Some guest or public networks block
 devices from reaching each other.
 </details>

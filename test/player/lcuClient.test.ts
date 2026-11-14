@@ -14,8 +14,14 @@ const seen: { method: string; path: string; type: string | null; body: string }[
 
 beforeAll(() => {
   const dir = mkdtempSync(join(tmpdir(), "lcu-tls-"));
-  const made = Bun.spawnSync(["openssl", "req", "-x509", "-newkey", "rsa:2048", "-nodes", "-days", "1", "-subj", "/CN=127.0.0.1",
-    "-keyout", join(dir, "key.pem"), "-out", join(dir, "cert.pem")]);
+  // Windows without Git's openssl: the tests below are skipped instead of failing the suite.
+  let made;
+  try {
+    made = Bun.spawnSync(["openssl", "req", "-x509", "-newkey", "rsa:2048", "-nodes", "-days", "1", "-subj", "/CN=127.0.0.1",
+      "-keyout", join(dir, "key.pem"), "-out", join(dir, "cert.pem")]);
+  } catch {
+    return;
+  }
   if (made.exitCode !== 0) return; // no openssl: the tests below are skipped
   server = Bun.serve({
     port: 0,

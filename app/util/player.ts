@@ -846,11 +846,6 @@ export interface AutoTickResult {
 }
 
 /**
- * One step of auto-accept / auto-ban / auto-pick. The app calls this every
- * couple of seconds while auto mode is on; each call does at most one thing.
- * It never overrides a champion you hovered yourself.
- */
-/**
  * Champions no one else can take right now: anything locked or banned, anything a teammate
  * is hovering or intends to play, and anything a teammate is about to ban. Enemy hovers do
  * not block a pick, so they are not counted.
@@ -879,6 +874,29 @@ export const openAction = (a: any) => a.isInProgress && !a.completed && (a.type 
 /** True when a match is waiting for your answer and you have not given one. */
 export const awaitingAnswer = (check: any) => check?.state === "InProgress" && check?.playerResponse === "None";
 
+/** A real champion id: a positive whole number (-1 is the client's "None"). */
+const isChampionId = (n: unknown): n is number => Number.isInteger(n) && (n as number) > 0;
+
+/**
+ * The champions you may choose for a pick or a ban, as ids. The client's pickable or bannable
+ * list can hold only its placeholder (-1, "None"); then the champion grid the client draws is
+ * used: champions that are not disabled and, for a pick, that you own or may play for free.
+ */
+export async function choosableChampions(client: LcuClient, type: string): Promise<number[]> {
+  const path = type === "ban" ? "/lol-champ-select/v1/bannable-champion-ids" : "/lol-champ-select/v1/pickable-champion-ids";
+  const ids = ((await client.get(path).catch(() => [])) as unknown[]).filter(isChampionId);
+  if (ids.length) return ids;
+  const grid: any[] = await client.get("/lol-champ-select/v1/all-grid-champions").catch(() => []);
+  return grid
+    .filter((c) => isChampionId(c?.id) && !c.disabled && (type === "ban" || c.owned || c.freeToPlay || c.rented || c.freeToPlayForQueue))
+    .map((c) => c.id as number);
+}
+
+/**
+ * One step of auto-accept / auto-ban / auto-pick. The app calls this every
+ * couple of seconds while auto mode is on; each call does at most one thing.
+ * It never overrides a champion you hovered yourself.
+ */
 export async function autoTick(client: LcuClient, cfg: AutoConfig): Promise<AutoTickResult> {
   const phase: string = await client.get("/lol-gameflow/v1/gameflow-phase");
 
@@ -914,11 +932,7 @@ export async function autoTick(client: LcuClient, cfg: AutoConfig): Promise<Auto
   const hovered: number = mine.championId || 0;
   let choice: number | undefined = hovered && !taken.has(hovered) ? hovered : undefined;
   if (!choice) {
-    const allowed = new Set<number>(
-      await client.get(
-        mine.type === "ban" ? "/lol-champ-select/v1/bannable-champion-ids" : "/lol-champ-select/v1/pickable-champion-ids"
-      )
-    );
+    const allowed = new Set<number>(await choosableChampions(client, mine.type));
     choice = wanted.find((id) => allowed.has(id) && !taken.has(id));
   }
   if (!choice) return idle(phase);

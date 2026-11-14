@@ -18,6 +18,18 @@ const EXPECTED_AUTH = `Basic ${btoa(`riot:${PASSWORD}`)}`;
 const EXPECTED_ROUTES = 769;
 const BUILD_VERSION = "16.20.824.8524";
 
+/** The TLS server needs openssl; without it (a Windows install without Git's tools) skip this file. */
+function opensslAvailable() {
+  try {
+    execFileSync("openssl", ["version"], { stdio: "ignore" });
+    return true;
+  } catch {
+    return false;
+  }
+}
+const HAVE_OPENSSL = opensslAvailable();
+const describeTls = HAVE_OPENSSL ? describe : describe.skip;
+
 let server: Server;
 let dir: string;
 
@@ -28,6 +40,7 @@ function fixtureResponse(name: string): Response {
 }
 
 beforeAll(() => {
+  if (!HAVE_OPENSSL) return;
   dir = mkdtempSync(join(tmpdir(), "golden-"));
   const key = join(dir, "key.pem");
   const cert = join(dir, "cert.pem");
@@ -82,7 +95,7 @@ async function runSidecar(args: string[]) {
   return { code, stdout, stderr };
 }
 
-describe("golden spec", () => {
+describeTls("golden spec", () => {
   test("builds the catalog spec from recorded client responses", async () => {
     const spec = await createSpec({
       address: "127.0.0.1",
@@ -111,7 +124,7 @@ describe("golden spec", () => {
   });
 });
 
-describe("sidecar CLI contract", () => {
+describeTls("sidecar CLI contract", () => {
   test("prints only the spec JSON on stdout and exits 0", async () => {
     const file = lockfile(`LeagueClient:1:${server.port}:${PASSWORD}:https`);
     const { code, stdout, stderr } = await runSidecar(["--lockfile", file]);

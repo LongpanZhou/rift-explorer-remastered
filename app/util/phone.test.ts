@@ -1,6 +1,9 @@
 import { beforeEach, expect, test } from "bun:test";
+import { mkdtempSync, writeFileSync } from "fs";
+import { tmpdir } from "os";
+import { join } from "path";
 import { ActionRefused, type LcuClient } from "./player";
-import { handlePhone, phoneAccess, phoneCreateLobby, phoneDodge, phoneSwap, phoneCancelQueue, phoneChoose, phoneLeaveLobby, phoneMode, phoneQueue, phoneReadyCheck, phoneSkin, phoneSpells, phoneState, resetModeCache, type PhoneDeps } from "./phone";
+import { handlePhone, phoneAccess, phoneCreateLobby, phoneDodge, phoneSwap, phoneCancelQueue, phoneChoose, phoneLeaveLobby, phoneMode, phoneQueue, phoneReadyCheck, phoneSkin, phoneSpells, phoneState, resetModeCache, servePhone, watchLockfile, type PhoneDeps } from "./phone";
 import { resetIconCache } from "./phoneIcons";
 import { resetRuneIconCache } from "./phoneRunes";
 import { fakeClient } from "./fakeClient";
@@ -37,6 +40,7 @@ test("the phone page opens only with the token from the QR code; ping stays open
   expect(first?.status).toBe(302);
   expect(first?.headers.get("location")).toBe("/");
   expect(first?.headers.get("set-cookie")).toContain(`phone=${token}`);
+  expect(first?.headers.get("set-cookie")).toContain("SameSite=Strict");
   expect(phoneAccess(at("/", { cookie: `phone=${token}` }), token)).toBeNull();
   expect(phoneAccess(at("/", { cookie: "phone=0000" }), token)?.status).toBe(403);
   expect(phoneAccess(at("/?t=0000"), token)?.status).toBe(403);
@@ -783,4 +787,35 @@ test("a failing Data Dragon is not asked again on every update", async () => {
   for (let i = 0; i < 5; i++) expect(((await phoneState(client, dragon.fetch)) as any).spellList).toEqual([]);
   // One attempt (the version list fails, so the spell list is never asked for); not one per update.
   expect(dragon.urls).toHaveLength(1);
+});
+
+// ---- The running server follows the client when it restarts. ----
+
+const lockFile = (port: number, password: string) => ({
+  username: "riot", password, port, protocol: "https", PID: 1, processName: "LeagueClient", address: "127.0.0.1",
+});
+
+test("the phone server follows the lockfile when the client restarts", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "rift-lock-watch-"));
+  const path = join(dir, "lockfile");
+  writeFileSync(path, "LeagueClient:1:1111:old:https");
+  const seen: any[] = [];
+  const stop = watchLockfile(lockFile(1111, "old"), path, (l) => seen.push(l), 20);
+  await Bun.sleep(60);
+  expect(seen).toEqual([]); // unchanged
+  writeFileSync(path, "LeagueClient:1:2222:new:https");
+  await Bun.sleep(160);
+  stop();
+  expect(seen.at(-1)).toMatchObject({ port: 2222, password: "new" });
+  // A missing file is not an error, and the last lock stays in use.
+  const missing = join(dir, "gone");
+  const none: any[] = [];
+  const stop2 = watchLockfile(lockFile(2222, "new"), missing, (l) => none.push(l), 20);
+  await Bun.sleep(100);
+  stop2();
+  expect(none).toEqual([]);
+});
+
+test("servePhone refuses a token that is not 32 hex characters", () => {
+  expect(() => servePhone(lockFile(1, "p"), 8787, "nope")).toThrow("32 hex");
 });

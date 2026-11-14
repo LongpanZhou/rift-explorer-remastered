@@ -30,8 +30,11 @@ export function queueName(g: Game): string {
 }
 
 export function formatDuration(seconds: number): string {
-  const m = Math.floor(seconds / 60);
-  const s = Math.round(seconds % 60);
+  // Average durations are fractional; round the whole duration first so 59.6 s is 1:00,
+  // never 0:60.
+  const total = Math.round(seconds);
+  const m = Math.floor(total / 60);
+  const s = total % 60;
   return `${m}:${String(s).padStart(2, "0")}`;
 }
 
