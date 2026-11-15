@@ -12,6 +12,13 @@ pub struct SidecarError {
     message: String,
 }
 
+impl SidecarError {
+    /// The user-facing text, for modules that need to pass it on as a plain error.
+    pub(crate) fn message(&self) -> &str {
+        &self.message
+    }
+}
+
 /// An error with no sidecar exit code, for a failure in the app itself.
 fn unavailable(message: String) -> SidecarError {
     SidecarError { code: -1, message }
@@ -82,15 +89,24 @@ fn sidecar_path(_app: &tauri::AppHandle) -> Result<std::path::PathBuf, SidecarEr
         .join("lcu-sidecar"))
 }
 
-/// On Windows the sidecar is built into this executable. It is written to the app's
-/// cache folder on first use, always under the same name: Windows Firewall remembers the
-/// user's "Allow" for that path, so the phone page keeps working after an update. A stamp
-/// file records which app version wrote it, so an update replaces the old copy.
+/// On Windows the sidecar and the ASCII converter are built into this executable, packed with
+/// zstd (build.rs), so the one portable file is about half the size. Each is unpacked to the
+/// app's cache folder on first use, always under the same name: Windows Firewall remembers the
+/// user's "Allow" for that path, so the phone page keeps working after an update. A stamp file
+/// records the app version and the packed and unpacked sizes, so an update replaces the old copy.
 #[cfg(windows)]
-const SIDECAR_EXE: &[u8] = include_bytes!("../binaries/lcu-sidecar-x86_64-pc-windows-msvc.exe");
+static SIDECAR_ZST: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/lcu-sidecar.exe.zst"));
+#[cfg(windows)]
+const SIDECAR_LEN: u64 = include!(concat!(env!("OUT_DIR"), "/lcu-sidecar.exe.len"));
+#[cfg(windows)]
+static CONVERTER_ZST: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/ascii-image-converter.exe.zst"));
+#[cfg(windows)]
+const CONVERTER_LEN: u64 = include!(concat!(env!("OUT_DIR"), "/ascii-image-converter.exe.len"));
 
+/// Unpacks a zstd-packed Windows asset into the app's cache folder. The temporary name keeps a
+/// half-written file from being run, and the stamp makes an app update replace the old copy.
 #[cfg(windows)]
-fn sidecar_path(app: &tauri::AppHandle) -> Result<std::path::PathBuf, SidecarError> {
+fn unpacked_asset(app: &tauri::AppHandle, name: &str, packed: &[u8], len: u64) -> Result<std::path::PathBuf, SidecarError> {
     let dir = app
         .path()
         .app_cache_dir()
@@ -100,20 +116,47 @@ fn sidecar_path(app: &tauri::AppHandle) -> Result<std::path::PathBuf, SidecarErr
     // Commands can run at the same time; one at a time checks and writes the file.
     static UNPACK: Mutex<()> = Mutex::new(());
     let _one_at_a_time = UNPACK.lock().unwrap_or_else(|e| e.into_inner());
-    let exe = dir.join("lcu-sidecar.exe");
-    let stamp = dir.join("lcu-sidecar.version");
-    let want = format!("{} {}", env!("CARGO_PKG_VERSION"), SIDECAR_EXE.len());
+    let exe = dir.join(name);
+    let stamp = dir.join(format!("{name}.version"));
+    let want = format!("{} {} {}", env!("CARGO_PKG_VERSION"), packed.len(), len);
     let current = std::fs::read_to_string(&stamp).ok() == Some(want.clone())
-        && std::fs::metadata(&exe).map(|m| m.len()).ok() == Some(SIDECAR_EXE.len() as u64);
+        && std::fs::metadata(&exe).map(|m| m.len()).ok() == Some(len);
     if !current {
         // Write to a temporary name first, so a half-written file is never run.
-        let tmp = dir.join(format!("lcu-sidecar.{}.tmp", std::process::id()));
-        std::fs::write(&tmp, SIDECAR_EXE)
+        let tmp = dir.join(format!("{name}.{}.tmp", std::process::id()));
+        let unpack = || -> std::io::Result<()> {
+            let mut decoder = zstd::stream::read::Decoder::new(packed)?;
+            let mut out = std::fs::File::create(&tmp)?;
+            std::io::copy(&mut decoder, &mut out)?;
+            out.sync_all()?;
+            Ok(())
+        };
+        unpack()
             .and_then(|_| std::fs::rename(&tmp, &exe))
             .and_then(|_| std::fs::write(&stamp, &want))
-            .map_err(|e| unavailable(format!("could not write the sidecar (is an old copy still running?): {e}")))?;
+            .map_err(|e| unavailable(format!("could not unpack {name} (is an old copy still running?): {e}")))?;
     }
     Ok(exe)
+}
+
+#[cfg(windows)]
+fn sidecar_path(app: &tauri::AppHandle) -> Result<std::path::PathBuf, SidecarError> {
+    unpacked_asset(app, "lcu-sidecar.exe", SIDECAR_ZST, SIDECAR_LEN)
+}
+
+/// On Windows the ASCII converter is unpacked from this executable; elsewhere it sits beside it.
+#[cfg(windows)]
+pub(crate) fn converter_path(app: &tauri::AppHandle) -> Result<std::path::PathBuf, SidecarError> {
+    unpacked_asset(app, "ascii-image-converter.exe", CONVERTER_ZST, CONVERTER_LEN)
+}
+
+#[cfg(not(windows))]
+pub(crate) fn converter_path(_app: &tauri::AppHandle) -> Result<std::path::PathBuf, SidecarError> {
+    Ok(std::env::current_exe()
+        .map_err(|e| unavailable(format!("no app location: {e}")))?
+        .parent()
+        .ok_or_else(|| unavailable("no app folder".into()))?
+        .join("ascii-image-converter"))
 }
 
 /// A command for the sidecar. On Windows it runs without a console window.

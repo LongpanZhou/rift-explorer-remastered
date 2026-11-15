@@ -2,7 +2,7 @@
 //! to the app. The picture goes in on stdin and the art comes out on stdout, one row per line.
 
 use std::io::Write;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::process::{Command, Stdio};
 
 use tauri::ipc::{InvokeBody, Request};
@@ -25,13 +25,6 @@ fn character_set(name: &str) -> Option<(&'static str, &'static str)> {
 }
 const MIN_COLS: u32 = 10;
 const MAX_COLS: u32 = 60;
-
-/// The converter bundled next to this app. Tauri puts it beside the app's executable.
-fn bundled_converter() -> Result<PathBuf, String> {
-    let exe = std::env::current_exe().map_err(|e| format!("no app location: {e}"))?;
-    let name = if cfg!(windows) { "ascii-image-converter.exe" } else { "ascii-image-converter" };
-    Ok(exe.parent().ok_or("no app folder")?.join(name))
-}
 
 /// The converter's own message, or a plain one when it gave none.
 fn or_failed(message: &str) -> String {
@@ -76,7 +69,7 @@ fn convert_with(converter: &Path, picture: &[u8], cols: u32, invert: bool, set: 
 /// in characters (`x-cols`), whether to invert (`x-invert: 1`) and the character set (`x-chars`,
 /// standard when it is not given).
 #[tauri::command]
-pub fn ascii_art(request: Request<'_>) -> Result<String, String> {
+pub fn ascii_art(app: tauri::AppHandle, request: Request<'_>) -> Result<String, String> {
     let InvokeBody::Raw(picture) = request.body() else {
         return Err("the picture was not sent as bytes".into());
     };
@@ -84,12 +77,14 @@ pub fn ascii_art(request: Request<'_>) -> Result<String, String> {
     let cols = header("x-cols").and_then(|v| v.parse::<u32>().ok()).ok_or("no width was given")?;
     let invert = header("x-invert") == Some("1");
     let set = character_set(header("x-chars").unwrap_or("standard")).ok_or("unknown character set")?;
-    convert_with(&bundled_converter()?, picture, cols, invert, set)
+    let converter = crate::converter_path(&app).map_err(|e| e.message().to_string())?;
+    convert_with(&converter, picture, cols, invert, set)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::path::PathBuf;
 
     /// The converter built for this machine (`bun scripts/build-converter.ts`). The tests are skipped without it.
     fn converter() -> Option<PathBuf> {

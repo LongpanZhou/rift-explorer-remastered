@@ -54,8 +54,8 @@ export function classify(err: any): { code: number; message: string } {
  * install path, then the running Riot client process. Rejects with an exit
  * code and message when none is found.
  */
-export async function findLockfile(explicit?: string): Promise<string> {
-  const path = explicit ?? DEFAULT_LOCKFILES.find((p) => existsSync(p)) ?? rememberedLockfile() ?? remember(await discoverLockfile());
+export async function findLockfile(explicit?: string, defaults: string[] = DEFAULT_LOCKFILES): Promise<string> {
+  const path = explicit ?? defaults.find((p) => existsSync(p)) ?? rememberedLockfile() ?? remember(await discoverLockfile());
   if (!existsSync(path)) {
     throw { code: EXIT.LOCKFILE_MISSING, message: `lockfile not found at ${path}` };
   }

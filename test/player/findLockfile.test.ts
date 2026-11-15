@@ -16,7 +16,7 @@ test("a remembered lockfile is used without looking the client up", async () => 
   writeFileSync(lockfile, "LeagueClient:1:2:pw:https");
   writeFileSync(REMEMBERED_LOCKFILE, lockfile);
   const t = Date.now();
-  expect(await findLockfile()).toBe(lockfile);
+  expect(await findLockfile(undefined, [])).toBe(lockfile);
   expect(Date.now() - t).toBeLessThan(200);
 });
 
